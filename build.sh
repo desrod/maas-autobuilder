@@ -10,8 +10,8 @@ check_bins() {
     fi
     
     for binary in "${required_bins[@]}"; do
-        if ! [ -x "$(command -v $binary)" ]; then
-            printf "Error: Necessary program '$binary' is not installed. Please fix, aborting now.\n\n" >&2
+        if ! [ -x "$(command -v "$binary")" ]; then
+            printf "Error: Necessary program '%s' is not installed. Please fix, aborting now.\n\n" "$binary" >&2
             exit 1
         fi
     done
@@ -29,18 +29,18 @@ init_variables() {
 
     maas_system_ip="$(hostname -I | awk '{print $1}')"
     maas_bridge_ip="$(ip addr show virbr0 | awk '/inet/ {print $2}' | cut -d/ -f1)"
-    maas_endpoint="http://${maas_bridge_ip}:5240/MAAS"
+    maas_endpoint="http://$maas_bridge_ip:5240/MAAS"
 
     # This is the proxy that MAAS itself uses (the "internal" MAAS proxy)
-    maas_local_proxy="http://${maas_bridge_ip}:8000"
+    maas_local_proxy="http://$maas_bridge_ip:8000"
     maas_upstream_dns="8.8.8.8"
 
     # This is an upstream, peer proxy that MAAS may need to talk to (tinyproxy in this case)
-    maas_upstream_proxy="http://${maas_system_ip}:8888"
+    # maas_upstream_proxy="http://$maas_system_ip:8888"
 
     virsh_chassis="qemu+ssh://${virsh_user}@${maas_system_ip}/system"
 
-    maas_packages=(maas maas-cli maas-common maas-proxy maas-dhcp maas-dns maas-rack-controller maas-region-api)
+    maas_packages=(maas maas-cli maas-proxy maas-dhcp maas-dns maas-rack-controller maas-region-api maas-common)
     pg_packages=(postgresql-9.5 postgresql-client postgresql-client-common postgresql-common)
 }
 
@@ -50,20 +50,19 @@ remove_maas() {
     sudo -u postgres psql -c "drop database maasdb"
 
     # Remove everything, start clean and clear from the top
-    sudo DEBIAN_FRONTEND=noninteractive apt-get -y remove --purge ${maas_packages[*]} ${pg_packages[*]} && \
-    
+    sudo DEBIAN_FRONTEND=noninteractive apt-get -y remove --purge "${maas_packages[@]}" "${pg_packages[@]}" && \
     sudo apt-get -fuy autoremove
 
     # Yes, they're removed but we want them PURGED, so this becomes idempotent
-    for package in "{$maas_packages[@]}" "{$pg_packages[@]}"; do
-        sudo dpkg -P "$package"
+    for package in "${maas_packages[@]}" "${pg_packages[@]}"; do
+       sudo dpkg -P "$package"
     done
 }
 
 install_maas() {
     # This is separate from the removal, so we can handle them atomically
     # sudo apt -fuy --reinstall install maas maas-cli jq tinyproxy htop vim-common
-    sudo apt -fuy --reinstall install "$maas_packages" "$pg_packages"
+    sudo apt -fuy --reinstall install "${maas_packages[@]}" "${pg_packages[@]}"
 }
 
 purge_admin_user() {
@@ -113,7 +112,7 @@ build_maas() {
 
     # This is needed, because it points to localhost by default and will fail to 
     # commission/deploy in this state
-    sudo maas-rack config --region-url http://${maas_bridge_ip}:5240/MAAS/ && sudo service maas-rackd restart
+    sudo maas-rack config --region-url "http://$maas_bridge_ip:5240/MAAS/" && sudo service maas-rackd restart
 
 }
 
@@ -151,25 +150,25 @@ add_cloud() {
 	cloud_name="$1"
 	maas_api_key=$(cat ~/.maas-api.key)
 
-cat > clouds-${rand_uuid}.yaml <<EOF
+cat > clouds-"$rand_uuid".yaml <<EOF
 clouds:
-  ${cloud_name}:
+  $cloud_name:
     type: maas
     auth-types: [ oauth1 ]
-    description: MAAS cloud for ${cloud_name}
+    description: MAAS cloud for $cloud_name
     # endpoint: ${maas_endpoint:0:-8}
-    endpoint: ${maas_endpoint}
+    endpoint: $maas_endpoint
 EOF
 
-cat > credentials-${rand_uuid}.yaml <<EOF
+cat > credentials-"$rand_uuid".yaml <<EOF
 credentials:
-      ${cloud_name}:
-        ${cloud_name}-auth:
+      $cloud_name:
+        $cloud_name-auth:
           auth-type: oauth1
-          maas-oauth: ${maas_api_key} 
+          maas-oauth: $maas_api_key 
 EOF
 
-cat > config-${rand_uuid}.yaml <<EOF
+cat > config-"$rand_uuid".yaml <<EOF
 automatically-retry-hooks: true
 default-series: xenial
 http-proxy: $maas_local_proxy
@@ -178,20 +177,20 @@ apt-http-proxy: $maas_local_proxy
 apt-https-proxy: $maas_local_proxy
 EOF
 
-    echo "Adding cloud............: ${cloud_name}" 
-    juju add-cloud --replace "$cloud_name" clouds-${rand_uuid}.yaml
+    echo "Adding cloud............: $cloud_name" 
+    juju add-cloud --replace "$cloud_name" clouds-"$rand_uuid".yaml
 
-    echo "Adding credentials for..: ${cloud_name}"
-    juju add-credential --replace "$cloud_name" -f credentials-${rand_uuid}.yaml
+    echo "Adding credentials for..: $cloud_name"
+    juju add-credential --replace "$cloud_name" -f credentials-"$rand_uuid".yaml
 
-    echo "Details for cloud.......: ${cloud_name}..."
+    echo "Details for cloud.......: $cloud_name..."
     juju clouds --format json | jq --arg cloud "$cloud_name" '.[$cloud]'
 
-    juju bootstrap "$cloud_name" --debug --config=config-${rand_uuid}.yaml
+    juju bootstrap "$cloud_name" --debug --config=config-"$rand_uuid".yaml
 
     # Since we created ephemeral files, let's wipe them out. Comment if you want to keep them around
     if [[ $? = 0 ]]; then
-	rm -f clouds-${rand_uuid}.yaml credentials-${rand_uuid}.yaml config-${rand_uuid}.yaml
+	rm -f clouds-"$rand_uuid".yaml credentials-"$rand_uuid".yaml config-"$rand_uuid".yaml
     fi
 }
 
@@ -199,8 +198,8 @@ EOF
 destroy_cloud() {
     cloud_name="$1"
 
-    juju clouds --format json | jq --arg cloud "${cloud_name}" '.[$cloud]'
-    juju remove-cloud $cloud_name
+    juju clouds --format json | jq --arg cloud "$cloud_name" '.[$cloud]'
+    juju remove-cloud "$cloud_name"
 
 }
 
@@ -208,7 +207,7 @@ show_help() {
   echo "
 
   -a <cloud_name>    Do EVERYTHING (maas, juju cloud, juju bootstrap)
-  -b                 Build out and bootstrap a new MAAS 
+  -b                 Build out and bootstrap a new MAAS
   -c <cloud_name>    Add a new cloud + credentials
   -i                 Just install the dependencies and exit
   -j <name>          Bootstrap the Juju controller called <name>
@@ -220,7 +219,7 @@ show_help() {
 
 
 if [ $# -eq 0 ]; then
-  printf "$0 needs options to function correctly. Valid options are:"
+  printf "%s needs options to function correctly. Valid options are:" "$0"
   show_help
   exit 0
 fi
@@ -269,12 +268,12 @@ while getopts ":a:bc:ij:nt:r" opt; do
     exit 0
     ;;
    \? )
-    printf "Unrecognized option: -$OPTARG. Valid options are:" >&2
+    printf "Unrecognized option: -%s. Valid options are:" "$OPTARG" >&2
     show_help
     exit 1
     ;;
     : )
-    printf "Option -$OPTARG needs an argument.\n" >&2
+    printf "Option -%s needs an argument.\n" "$OPTARG" >&2
     show_help
     echo ""
     exit 1
