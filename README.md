@@ -7,8 +7,8 @@
 ## Components
 
 
-## Ensuring it's working
+## Installing and testing MAAS 
 
 
-## What next?
+## TODO and What's Next
 
