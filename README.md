@@ -6,6 +6,7 @@
 
 ## Components
 
+```
   -a <cloud_name>    Do EVERYTHING (maas, juju cloud, juju bootstrap)
   -b                 Build out and bootstrap a new MAAS
   -c <cloud_name>    Add a new cloud + credentials
@@ -14,7 +15,7 @@
   -n                 Create MAAS kvm nodes (to be imported into chassis)
   -r                 Remove the entire MAAS server + dependencies
   -t <cloud_name>    Tear down the cloud named <cloud_name>
-
+```
 
 ## Installing and testing MAAS 
 
