@@ -20,7 +20,7 @@ check_bins() {
 # Initialize some vars we'll reuse later in the build, bootstrap
 init_variables() {
     # This is the user who 'maas' uses when commissioning nodes
-    virsh_user="desrod"
+    virsh_user="ubuntu"
     maas_profile="admin"
     maas_pass="openstack"
 
@@ -33,7 +33,7 @@ init_variables() {
 
     # This is the proxy that MAAS itself uses (the "internal" MAAS proxy)
     maas_local_proxy="http://$maas_bridge_ip:8000"
-    maas_upstream_dns="8.8.8.8"
+    maas_upstream_dns="1.1.1.1 1.0.0.1 8.8.8.8 8.8.4.4"
 
     # This is an upstream, peer proxy that MAAS may need to talk to (tinyproxy in this case)
     # maas_upstream_proxy="http://$maas_system_ip:8888"
@@ -101,13 +101,14 @@ build_maas() {
     # Update settings to match our needs
     maas $maas_profile maas set-config name=network_discovery value=disabled
     maas $maas_profile maas set-config name=active_discovery_interval value=0
-    maas $maas_profile maas set-config name=kernel_opts value="console=ttyS0,115200 elevator=cfq nosplash"
+    maas $maas_profile maas set-config name=kernel_opts value="console=ttyS0,115200 console=tty0,115200 elevator=cfq intel_iommu=on iommu=pt debug nosplash scsi_mod.use_blk_mq=1 dm_mod.use_blk_mq=1 enable_mtrr_cleanup mtrr_spare_reg_nr=1 systemd.log_level=debug"
     maas $maas_profile maas set-config name=maas_name value=us-east
     maas $maas_profile maas set-config name=upstream_dns value="$maas_upstream_dns"
-    maas $maas_profile maas set-config name=enable_analytics value=False
-    maas $maas_profile maas set-config name=enable_http_proxy value=False
-    maas $maas_profile maas set-config name=enable_third_party_drivers value=False
+    maas $maas_profile maas set-config name=enable_analytics value=false
+    maas $maas_profile maas set-config name=enable_http_proxy value=true
+    maas $maas_profile maas set-config name=enable_third_party_drivers value=false
     maas $maas_profile ipranges create type=dynamic start_ip=192.168.100.100 end_ip=192.168.100.200 comment='This is the reserved range for MAAS nodes'
+    sleep 4
     maas $maas_profile vlan update fabric-1 0 dhcp_on=True primary_rack="$maas_system_id"
 
     # This is needed, because it points to localhost by default and will fail to 
