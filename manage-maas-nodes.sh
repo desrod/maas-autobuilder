@@ -3,116 +3,85 @@
 # set -x
 
 storage_path="/storage/images/maas"
-fmt="qcow2"
-bootstrap="maas-bootstrap"
+storage_format="qcow2"
 compute="maas-node"
 node_count=10
 nic_model="virtio"
 network="maas"
 
 create_vms() {
-	# make_bootnode
 	create_storage
 	build_vms
 }
+
 
 wipe_vms() {
 	destroy_vms
 }
 
-create_volumes() {
-        compute_name="$1"
-        node_name="$1"
-
-        /usr/bin/qemu-img create -f "$fmt" "$storage_path/$compute_name/$node_name-d1.$fmt" 40G &
-        /usr/bin/qemu-img create -f "$fmt" "$storage_path/$compute_name/$node_name-d2.$fmt" 20G &
-        /usr/bin/qemu-img create -f "$fmt" "$storage_path/$compute_name/$node_name-d3.$fmt" 20G &
-}
-
-generate_mac() {
-        printf '52:54:00:63:%02x:%02x\n' "$((RANDOM%256))" "$((RANDOM%256))"
-}
-
-make_bootnode() {
-        ram="2048"
-        vcpus="2"
-        bus="scsi"
-
-        virt-install --noautoconsole --print-xml \
-                --boot network,hd,menu=on        \
-                --graphics spice        \
-                --video qxl             \
-                --channel spicevmc      \
-                --name "$bootstrap"     \
-                --ram "$ram"            \
-                --vcpus "$vcpus"        \
-                --controller "$bus",model=virtio-scsi,index=0 \
-                --disk path="$storage_path/$compute_name/$node_name-d1.$fmt,format=$fmt,size=40,bus=$bus,cache=writeback" \
-                --disk path="$storage_path/$compute_name/$node_name-d2.$fmt,format=$fmt,size=20,bus=$bus,cache=writeback" \
-                --disk path="$storage_path/$compute_name/$node_name-d3.$fmt,format=$fmt,size=20,bus=$bus,cache=writeback" \
-                --network=network=$network,mac="$(generate_mac)",model=$nic_model \
-                --network=network=$network,mac="$(generate_mac)",model=$nic_model > "$bootstrap.xml"
-
-        # virsh define "$bootstrap".xml
-        # mkdir -p "$storage_path/$bootstrap"
-		# makevols "$bootstrap"
-		# make_bootnode
-}
-
 
 create_storage() {
-	for machine in $(seq -w 01 $node_count); do
-	        mkdir -p "$storage_path/$compute-$machine"
-	        create_volumes "$compute-$machine"
+	for ((machine=1; machine<=node_count; machine++)); do
+		printf -v maas_node %s-%02d "$compute" "$machine"
+	        mkdir -p "$storage_path/$maas_node"
+        	/usr/bin/qemu-img create -f "$storage_format" "$storage_path/$maas_node/$maas_node-d1.img" 40G &
+        	/usr/bin/qemu-img create -f "$storage_format" "$storage_path/$maas_node/$maas_node-d2.img" 20G &
+        	/usr/bin/qemu-img create -f "$storage_format" "$storage_path/$maas_node/$maas_node-d3.img" 20G &
 	done
 }
 
 
 build_vms() {
-	for virt in $(seq -w 01 $node_count); do
+        for ((virt=1; virt<=node_count; virt++)); do
+		printf -v virt_node %s-%02d "$compute" "$virt"
 	        ram="4096"
 	        vcpus="4"
 	        bus="scsi"
-	        macaddr=$(generate_mac)
+	        macaddr=$(printf '52:54:00:63:%02x:%02x\n' "$((RANDOM%256))" "$((RANDOM%256))")
 
 	        virt-install --noautoconsole --print-xml \
 	                --boot network,hd,menu=on        \
 	                --graphics spice                 \
 	                --video qxl                      \
 	                --channel spicevmc               \
-	                --name "$compute-$virt"          \
+	                --name "$virt_node"              \
 	                --ram "$ram"                     \
 	                --vcpus "$vcpus"                 \
 	                --controller "$bus",model=virtio-scsi,index=0  \
-	                --disk path="$storage_path/$compute-$virt/$compute-$virt-d1.$fmt,format=$fmt,size=40,bus=$bus,cache=writeback" \
-	                --disk path="$storage_path/$compute-$virt/$compute-$virt-d2.$fmt,format=$fmt,size=20,bus=$bus,cache=writeback" \
-	                --disk path="$storage_path/$compute-$virt/$compute-$virt-d3.$fmt,format=$fmt,size=20,bus=$bus,cache=writeback" \
-	                --network=network=$network,mac="$macaddr",model=$nic_model > "$compute-$virt.xml"
+	                --disk path="$storage_path/$virt_node/$virt_node-d1.img,format=$storage_format,size=40,bus=$bus,cache=writeback" \
+	                --disk path="$storage_path/$virt_node/$virt_node-d2.img,format=$storage_format,size=20,bus=$bus,cache=writeback" \
+	                --disk path="$storage_path/$virt_node/$virt_node-d3.img,format=$storage_format,size=20,bus=$bus,cache=writeback" \
+	                --network=network=$network,mac="$macaddr",model=$nic_model > "$virt_node.xml"
 
-	        virsh define "$compute-$virt.xml"
-	        # virsh start "$compute-$virt"
+	        virsh define "$virt_node.xml"
+	        virsh start "$virt_node"
 	done
 }
 
 destroy_vms() {
-	for node in $(seq -w 01 $node_count); do
+	for ((node=1; node<=node_count; node++)); do
+		printf -v compute_node %s-%02d "$compute" "$node"
+
 	        # If the domain is running, this will complete, else throw a warning 
-	        virsh --connect qemu:///system destroy "$compute-$node"
+	        virsh --connect qemu:///system destroy "$compute_node"
 
 	        # Actually remove the VM
-	        virsh --connect qemu:///system undefine "$compute-$node"
+	        virsh --connect qemu:///system undefine "$compute_node"
 
 	        # Remove the three storage volumes from disk
 	        for disk in {1..3}; do
-	                virsh vol-delete --pool "$compute-$node" "$compute-$node-d$disk.qcow2"
+	                virsh vol-delete --pool "$compute_node" "$compute_node-d${disk}.img"
 	        done
-	        rm -rf "$storage_path/$compute-$node/"
+	        rm -rf "$storage_path/$compute_node/"
 	        sync
-	        rm "$compute-$node.xml" "/etc/libvirt/storage/$compute-$node.xml" "/etc/libvirt/storage/autostart/$compute-$node.xml"
+	        rm -f "$compute_node.xml" \
+			"/etc/libvirt/qemu/$compute_node.xml"    \
+			"/etc/libvirt/storage/$compute_node.xml" \
+			"/etc/libvirt/storage/autostart/$compute_node.xml"
 	done
 }
 
-while getopts ":cwg" opt; do
+while getopts ":cw" opt; do
   case $opt in
     c)
 		create_vms
