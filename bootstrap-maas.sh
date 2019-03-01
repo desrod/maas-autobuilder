@@ -28,12 +28,17 @@ init_variables() {
     launchpad_user="setuid"
 
     maas_system_ip="$(hostname -I | awk '{print $1}')"
-    maas_bridge_ip="$(ip addr show virbr0 | awk '/inet/ {print $2}' | cut -d/ -f1)"
+
+    # This is an ugly hack, but it works to get the IP of the primary virtual bridge interface
+    maas_bridge_ip="$(ip a s virbr0 | awk '/inet/ {print $2}' | cut -d/ -f1)"
     maas_endpoint="http://$maas_bridge_ip:5240/MAAS"
 
     # This is the proxy that MAAS itself uses (the "internal" MAAS proxy)
     maas_local_proxy="http://$maas_bridge_ip:8000"
-    maas_upstream_dns="1.1.1.1 1.0.0.1 8.8.8.8 8.8.4.4"
+    maas_upstream_dns="1.1.1.1 4.4.4.4 8.8.8.8"
+
+    echo "MAAS Endpoint: $maas_endpoint"
+    echo "MAAS Proxy: $maas_local_proxy"
 
     # This is an upstream, peer proxy that MAAS may need to talk to (tinyproxy in this case)
     # maas_upstream_proxy="http://$maas_system_ip:8888"
@@ -41,7 +46,7 @@ init_variables() {
     virsh_chassis="qemu+ssh://${virsh_user}@${maas_system_ip}/system"
 
     maas_packages=(maas maas-cli maas-proxy maas-dhcp maas-dns maas-rack-controller maas-region-api maas-common)
-    pg_packages=(postgresql-9.5 postgresql-client postgresql-client-common postgresql-common)
+    pg_packages=(postgresql-10 postgresql-client postgresql-client-common postgresql-common)
 }
 
 remove_maas() {
@@ -62,7 +67,7 @@ remove_maas() {
 install_maas() {
     # This is separate from the removal, so we can handle them atomically
     # sudo apt -fuy --reinstall install maas maas-cli jq tinyproxy htop vim-common
-    sudo apt -fuy --reinstall install "${maas_packages[@]}" "${pg_packages[@]}"
+    sudo apt-get -fuy --reinstall install "${maas_packages[@]}" "${pg_packages[@]}"
 }
 
 purge_admin_user() {
@@ -81,11 +86,12 @@ EOF
 build_maas() {
     # maas_endpoint=$(maas list | awk '{print $2}')
 
-
-
     # Create the initial 'admin' user of MAAS, purge first!
     purge_admin_user
     sudo maas createadmin --username "$maas_profile" --password "$maas_pass" --email "$maas_profile"@"$maas_pass" --ssh-import lp:"$launchpad_user"
+
+    sudo chsh -s /bin/bash maas
+    sudo chown -R maas:maas /var/lib/maas
 
     maas_api_key="$(sudo maas-region apikey --username=$maas_profile | tee ~/.maas-api.key)"
 
@@ -107,8 +113,11 @@ build_maas() {
     maas $maas_profile maas set-config name=enable_analytics value=false
     maas $maas_profile maas set-config name=enable_http_proxy value=true
     maas $maas_profile maas set-config name=enable_third_party_drivers value=false
+    maas $maas_profile maas set-config name=curtin_verbose value=true
+    maas $maas_profile boot-source update 1 url=http://10.0.1.28/maas/images/ephemeral-v3/daily/
+    sleep 3
     maas $maas_profile ipranges create type=dynamic start_ip=192.168.100.100 end_ip=192.168.100.200 comment='This is the reserved range for MAAS nodes'
-    sleep 4
+    sleep 6
     maas $maas_profile vlan update fabric-1 0 dhcp_on=True primary_rack="$maas_system_id"
 
     # This is needed, because it points to localhost by default and will fail to 
@@ -171,7 +180,7 @@ EOF
 
 cat > config-"$rand_uuid".yaml <<EOF
 automatically-retry-hooks: true
-default-series: xenial
+default-series: bionic
 http-proxy: $maas_local_proxy
 https-proxy: $maas_local_proxy
 apt-http-proxy: $maas_local_proxy

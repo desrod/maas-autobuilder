@@ -5,7 +5,10 @@
 storage_path="/storage/images/maas"
 storage_format="qcow2"
 compute="maas-node"
-node_count=10
+node_count=20
+node_start=1
+node_cpus=4
+node_ram=4096
 nic_model="virtio"
 network="maas"
 
@@ -21,7 +24,7 @@ wipe_vms() {
 
 
 create_storage() {
-	for ((machine=1; machine<=node_count; machine++)); do
+	for ((machine="$node_start"; machine<=node_count; machine++)); do
 		printf -v maas_node %s-%02d "$compute" "$machine"
 	        mkdir -p "$storage_path/$maas_node"
         	/usr/bin/qemu-img create -f "$storage_format" "$storage_path/$maas_node/$maas_node-d1.img" 40G &
@@ -32,17 +35,17 @@ create_storage() {
 
 
 build_vms() {
-        for ((virt=1; virt<=node_count; virt++)); do
+        for ((virt="$node_start"; virt<=node_count; virt++)); do
 		printf -v virt_node %s-%02d "$compute" "$virt"
-	        ram="4096"
-	        vcpus="4"
+	        ram="$node_ram"
+	        vcpus="$node_cpus"
 	        bus="scsi"
 	        macaddr=$(printf '52:54:00:63:%02x:%02x\n' "$((RANDOM%256))" "$((RANDOM%256))")
 
 	        virt-install --noautoconsole --print-xml \
 	                --boot network,hd,menu=on        \
 	                --graphics spice                 \
-	                --video qxl                      \
+	                --video vga                      \
 	                --channel spicevmc               \
 	                --name "$virt_node"              \
 	                --ram "$ram"                     \
@@ -59,7 +62,7 @@ build_vms() {
 }
 
 destroy_vms() {
-	for ((node=1; node<=node_count; node++)); do
+	for ((node="$node_start"; node<=node_count; node++)); do
 		printf -v compute_node %s-%02d "$compute" "$node"
 
 	        # If the domain is running, this will complete, else throw a warning 
