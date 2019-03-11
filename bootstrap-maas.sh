@@ -110,11 +110,13 @@ build_maas() {
     maas $maas_profile maas set-config name=kernel_opts value="console=ttyS0,115200 console=tty0,115200 elevator=cfq intel_iommu=on iommu=pt debug nosplash scsi_mod.use_blk_mq=1 dm_mod.use_blk_mq=1 enable_mtrr_cleanup mtrr_spare_reg_nr=1 systemd.log_level=debug"
     maas $maas_profile maas set-config name=maas_name value=us-east
     maas $maas_profile maas set-config name=upstream_dns value="$maas_upstream_dns"
+    maas $maas_profile maas set-config name=dnssec_validation value=no
     maas $maas_profile maas set-config name=enable_analytics value=false
     maas $maas_profile maas set-config name=enable_http_proxy value=true
     maas $maas_profile maas set-config name=enable_third_party_drivers value=false
     maas $maas_profile maas set-config name=curtin_verbose value=true
     maas $maas_profile boot-source update 1 url=http://10.0.1.28/maas/images/ephemeral-v3/daily/
+    maas $maas_profile subnet update 2 gateway_ip=$maas_bridge_ip
     sleep 3
     maas $maas_profile ipranges create type=dynamic start_ip=192.168.100.100 end_ip=192.168.100.200 comment='This is the reserved range for MAAS nodes'
     sleep 6
@@ -122,6 +124,7 @@ build_maas() {
 
     # This is needed, because it points to localhost by default and will fail to 
     # commission/deploy in this state
+    echo "DEBUG: http://$maas_bridge_ip:5240/MAAS/"
     sudo maas-rack config --region-url "http://$maas_bridge_ip:5240/MAAS/" && sudo service maas-rackd restart
 
 }
