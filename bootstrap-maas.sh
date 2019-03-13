@@ -115,7 +115,7 @@ build_maas() {
     maas $maas_profile maas set-config name=enable_http_proxy value=true
     maas $maas_profile maas set-config name=enable_third_party_drivers value=false
     maas $maas_profile maas set-config name=curtin_verbose value=true
-    maas $maas_profile boot-source update 1 url=http://10.0.1.28/maas/images/ephemeral-v3/daily/
+    # maas $maas_profile boot-source update 1 url=http://10.0.1.28/maas/images/ephemeral-v3/daily/
     maas $maas_profile subnet update 2 gateway_ip=$maas_bridge_ip
     sleep 3
     maas $maas_profile ipranges create type=dynamic start_ip=192.168.100.100 end_ip=192.168.100.200 comment='This is the reserved range for MAAS nodes'

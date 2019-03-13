@@ -13,8 +13,7 @@ nic_model="virtio"
 network="maas"
 
 create_vms() {
-	create_storage
-	build_vms
+	create_storage & build_vms
 }
 
 
@@ -42,22 +41,24 @@ build_vms() {
 	        bus="scsi"
 	        macaddr=$(printf '52:54:00:63:%02x:%02x\n' "$((RANDOM%256))" "$((RANDOM%256))")
 
-	        virt-install -v --noautoconsole --print-xml \
-	                --boot network,hd,menu=on        \
-	                --graphics spice                 \
-	                --video qxl                      \
-	                --channel spicevmc               \
-	                --name "$virt_node"              \
-	                --ram "$ram"                     \
-	                --cpu host-passthrough,cache.mode=passthrough \
-	                --vcpus "$vcpus"                 \
+	        virt-install -v --noautoconsole   \
+	                --print-xml               \
+                        --autostart               \
+	                --boot network,hd,menu=on \
+	                --graphics spice          \
+	                --video qxl,vram=1024     \
+	                --channel spicevmc        \
+	                --name "$virt_node"       \
+	                --ram "$ram"              \
+	                --vcpus "$vcpus"          \
+	                --cpu host-passthrough,cache.mode=passthrough  \
 	                --controller "$bus",model=virtio-scsi,index=0  \
 	                --disk path="$storage_path/$virt_node/$virt_node-d1.img,format=$storage_format,size=40,bus=$bus,cache=writeback" \
 	                --disk path="$storage_path/$virt_node/$virt_node-d2.img,format=$storage_format,size=20,bus=$bus,cache=writeback" \
 	                --disk path="$storage_path/$virt_node/$virt_node-d3.img,format=$storage_format,size=20,bus=$bus,cache=writeback" \
 	                --network=network=$network,mac="$macaddr",model=$nic_model > "$virt_node.xml" 
 	        virsh define "$virt_node.xml"
-	        virsh start "$virt_node"
+	        # virsh start "$virt_node"
 	done
 }
 
