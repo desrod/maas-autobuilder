@@ -115,12 +115,15 @@ build_maas() {
     maas $maas_profile maas set-config name=enable_http_proxy value=true
     maas $maas_profile maas set-config name=enable_third_party_drivers value=false
     maas $maas_profile maas set-config name=curtin_verbose value=true
-    # maas $maas_profile boot-source update 1 url=http://10.0.1.28/maas/images/ephemeral-v3/daily/
+
+    maas $maas_profile boot-source update 1 url=http://$maas_bridge_ip:8765/maas/images/ephemeral-v3/daily/
+    maas $maas_profile package-repository update 1 name='main_archive' url=http://$maas_bridge_ip:8765/mirror/ubuntu
+
     maas $maas_profile subnet update 2 gateway_ip=$maas_bridge_ip
     sleep 3
     maas $maas_profile ipranges create type=dynamic start_ip=192.168.100.100 end_ip=192.168.100.200 comment='This is the reserved range for MAAS nodes'
-    sleep 6
-    maas $maas_profile vlan update fabric-1 0 dhcp_on=True primary_rack="$maas_system_id"
+    sleep 3
+    maas $maas_profile vlan update fabric-2 0 dhcp_on=True primary_rack="$maas_system_id"
 
     # This is needed, because it points to localhost by default and will fail to 
     # commission/deploy in this state
@@ -171,6 +174,11 @@ clouds:
     description: MAAS cloud for $cloud_name
     # endpoint: ${maas_endpoint:0:-8}
     endpoint: $maas_endpoint
+    config:
+      apt-mirror: http://192.168.1.10:8765/mirror/ubuntu/
+      enable-os-refresh-update: true
+      enable-os-upgrade: false
+      logging-config: <root>=DEBUG
 EOF
 
 cat > credentials-"$rand_uuid".yaml <<EOF

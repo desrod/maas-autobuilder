@@ -8,9 +8,12 @@ compute="maas-node"
 node_count=20
 node_start=1
 node_cpus=4
-node_ram=4096
+node_ram=8192
 nic_model="virtio"
 network="maas"
+d1=20
+d2=50
+d3=50
 
 create_vms() {
 	create_storage & build_vms
@@ -26,9 +29,9 @@ create_storage() {
 	for ((machine="$node_start"; machine<=node_count; machine++)); do
 		printf -v maas_node %s-%02d "$compute" "$machine"
 	        mkdir -p "$storage_path/$maas_node"
-        	/usr/bin/qemu-img create -f "$storage_format" "$storage_path/$maas_node/$maas_node-d1.img" 40G &
-        	/usr/bin/qemu-img create -f "$storage_format" "$storage_path/$maas_node/$maas_node-d2.img" 20G &
-        	/usr/bin/qemu-img create -f "$storage_format" "$storage_path/$maas_node/$maas_node-d3.img" 20G &
+		/usr/bin/qemu-img create -f "$storage_format" -o preallocation=metadata,compat=1.1,lazy_refcounts=on "$storage_path/$maas_node/$maas_node-d1.img" "$d1"G &
+		/usr/bin/qemu-img create -f "$storage_format" -o preallocation=metadata,compat=1.1,lazy_refcounts=on "$storage_path/$maas_node/$maas_node-d2.img" "$d2"G &
+		/usr/bin/qemu-img create -f "$storage_format" -o preallocation=metadata,compat=1.1,lazy_refcounts=on "$storage_path/$maas_node/$maas_node-d3.img" "$d3"G &
 	done
 }
 
@@ -39,24 +42,27 @@ build_vms() {
 	        ram="$node_ram"
 	        vcpus="$node_cpus"
 	        bus="scsi"
-	        macaddr=$(printf '52:54:00:63:%02x:%02x\n' "$((RANDOM%256))" "$((RANDOM%256))")
+	        macaddr1=$(printf '52:54:00:63:%02x:%02x\n' "$((RANDOM%256))" "$((RANDOM%256))")
+	        macaddr2=$(printf '52:54:00:63:%02x:%02x\n' "$((RANDOM%256))" "$((RANDOM%256))")
 
 	        virt-install -v --noautoconsole   \
 	                --print-xml               \
                         --autostart               \
 	                --boot network,hd,menu=on \
-	                --graphics spice          \
-	                --video qxl,vram=1024     \
+	                --video qxl,vram=256      \
 	                --channel spicevmc        \
 	                --name "$virt_node"       \
 	                --ram "$ram"              \
 	                --vcpus "$vcpus"          \
+	                --console pty,target_type=serial \
+	                --graphics spice,clipboard_copypaste=no,mouse_mode=client,filetransfer_enable=off \
 	                --cpu host-passthrough,cache.mode=passthrough  \
 	                --controller "$bus",model=virtio-scsi,index=0  \
-	                --disk path="$storage_path/$virt_node/$virt_node-d1.img,format=$storage_format,size=40,bus=$bus,cache=writeback" \
-	                --disk path="$storage_path/$virt_node/$virt_node-d2.img,format=$storage_format,size=20,bus=$bus,cache=writeback" \
-	                --disk path="$storage_path/$virt_node/$virt_node-d3.img,format=$storage_format,size=20,bus=$bus,cache=writeback" \
-	                --network=network=$network,mac="$macaddr",model=$nic_model > "$virt_node.xml" 
+	                --disk path="$storage_path/$virt_node/$virt_node-d1.img,format=$storage_format,size=$d1,bus=$bus,io=native,cache=none" \
+	                --disk path="$storage_path/$virt_node/$virt_node-d2.img,format=$storage_format,size=$d2,bus=$bus,io=native,cache=none" \
+	                --disk path="$storage_path/$virt_node/$virt_node-d3.img,format=$storage_format,size=$d3,bus=$bus,io=native,cache=none" \
+                        --network=network=$network,mac="$macaddr1",model=$nic_model \
+                        --network=network=$network,mac="$macaddr2",model=$nic_model > "$virt_node.xml"
 	        virsh define "$virt_node.xml"
 	        # virsh start "$virt_node"
 	done
