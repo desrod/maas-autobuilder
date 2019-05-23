@@ -3,7 +3,7 @@
 # set -x
 
 storage_path="/storage/images/maas"
-storage_format="qcow2"
+storage_format="raw"
 compute="maas-node"
 node_count=20
 node_start=1
@@ -29,9 +29,9 @@ create_storage() {
 	for ((machine="$node_start"; machine<=node_count; machine++)); do
 		printf -v maas_node %s-%02d "$compute" "$machine"
 	        mkdir -p "$storage_path/$maas_node"
-		/usr/bin/qemu-img create -f "$storage_format" -o preallocation=metadata,compat=1.1,lazy_refcounts=on "$storage_path/$maas_node/$maas_node-d1.img" "$d1"G &
-		/usr/bin/qemu-img create -f "$storage_format" -o preallocation=metadata,compat=1.1,lazy_refcounts=on "$storage_path/$maas_node/$maas_node-d2.img" "$d2"G &
-		/usr/bin/qemu-img create -f "$storage_format" -o preallocation=metadata,compat=1.1,lazy_refcounts=on "$storage_path/$maas_node/$maas_node-d3.img" "$d3"G &
+		/usr/bin/qemu-img create -f "$storage_format" "$storage_path/$maas_node/$maas_node-d1.img" "$d1"G &
+		/usr/bin/qemu-img create -f "$storage_format" "$storage_path/$maas_node/$maas_node-d2.img" "$d2"G &
+		/usr/bin/qemu-img create -f "$storage_format" "$storage_path/$maas_node/$maas_node-d3.img" "$d3"G &
 	done
 }
 
@@ -58,9 +58,9 @@ build_vms() {
 	                --graphics spice,clipboard_copypaste=no,mouse_mode=client,filetransfer_enable=off \
 	                --cpu host-passthrough,cache.mode=passthrough  \
 	                --controller "$bus",model=virtio-scsi,index=0  \
-	                --disk path="$storage_path/$virt_node/$virt_node-d1.img,format=$storage_format,size=$d1,bus=$bus,io=native,cache=none" \
-	                --disk path="$storage_path/$virt_node/$virt_node-d2.img,format=$storage_format,size=$d2,bus=$bus,io=native,cache=none" \
-	                --disk path="$storage_path/$virt_node/$virt_node-d3.img,format=$storage_format,size=$d3,bus=$bus,io=native,cache=none" \
+	                --disk path="$storage_path/$virt_node/$virt_node-d1.img,format=$storage_format,size=$d1,bus=$bus,io=native,cache=directsync" \
+	                --disk path="$storage_path/$virt_node/$virt_node-d2.img,format=$storage_format,size=$d2,bus=$bus,io=native,cache=directsync" \
+	                --disk path="$storage_path/$virt_node/$virt_node-d3.img,format=$storage_format,size=$d3,bus=$bus,io=native,cache=directsync" \
                         --network=network=$network,mac="$macaddr1",model=$nic_model \
                         --network=network=$network,mac="$macaddr2",model=$nic_model > "$virt_node.xml"
 	        virsh define "$virt_node.xml"

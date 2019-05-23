@@ -113,6 +113,7 @@ build_maas() {
     maas $maas_profile maas set-config name=dnssec_validation value=no
     maas $maas_profile maas set-config name=enable_analytics value=false
     maas $maas_profile maas set-config name=enable_http_proxy value=true
+    maas $maas_profile maas set-config name=http_proxy value=http://192.168.100.10:3128/
     maas $maas_profile maas set-config name=enable_third_party_drivers value=false
     maas $maas_profile maas set-config name=curtin_verbose value=true
 
@@ -175,7 +176,12 @@ clouds:
     # endpoint: ${maas_endpoint:0:-8}
     endpoint: $maas_endpoint
     config:
-      apt-mirror: http://192.168.1.10:8765/mirror/ubuntu/
+      apt-mirror: http://192.168.100.1:8765/mirror/ubuntu/
+      apt-http-proxy: http://192.168.100.10:3128/
+      apt-https-proxy: http://192.168.100.10:3128/
+      snap-http-proxy: http://192.168.100.10:3128/
+      snap-https-proxy: http://192.168.100.10:3128/
+      snap-store-proxy: http://192.168.100.10:3128/
       enable-os-refresh-update: true
       enable-os-upgrade: false
       logging-config: <root>=DEBUG
