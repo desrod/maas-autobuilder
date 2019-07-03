@@ -1,0 +1,62 @@
+#!/usr/bin/env bash
+# To use an OpenStack cloud you need to authenticate against the Identity
+# service named keystone, which returns a **Token** and **Service Catalog**. 
+# The catalog contains the endpoints for all services the user/tenant has
+# access to - such as Compute, Image Service, Identity, Object Storage,
+# Block Storage, and Networking (code-named nova, glance, keystone, swift,
+# cinder, and neutron).
+#
+# *NOTE*: Using the 3 *Identity API* does not necessarily mean any other
+# OpenStack API is version 3.  For example, your cloud provider may
+# implement Image API v1.1, Block Storage API v2, and Compute API v2.0. 
+# OS_AUTH_URL is only for the Identity API served through keystone.
+
+# Name of the model where you've deployed your openstack-base charm
+juju_model=openstack-base
+
+# Let's get the IP of the keystone unit,  so we can use it to auth
+OS_AUTH_IP=$(juju status -m "$juju_model" --format json | jq -r '.applications[] | select(."charm-name" == "keystone").units."keystone/0"."public-address"')
+export OS_AUTH_URL=http://${OS_AUTH_IP}:5000/v3
+
+# With the addition of Keystone we have standardized on the term **project**
+# as the entity that owns the resources.
+export OS_PROJECT_NAME="admin"
+export OS_USER_DOMAIN_NAME="admin_domain"
+
+# Extract MySQL password, for use in extracting PROJECT_ID and
+# PROJECT_DOMAIN_ID below
+mysql_cmd_prefix="mysql -ss -N -u root"
+mysql_auth="$(juju run -m "$juju_model" --unit mysql/0 leader-get root-password)"
+
+# If the variable is empty, let's unset it vs.  leaving it around with an
+# empty value.
+if [ -z "$OS_USER_DOMAIN_NAME" ]; then 
+    unset OS_USER_DOMAIN_NAME; 
+fi
+
+# These are toothy, but we grab the OS_USER_DOMAIN_NAME from unit mysql/0,
+# then use that as the key to the OS_PROJECT_ID field by querying the db
+# again.  The original method used 'juju ssh', which was a bit slow, so
+# switched to using 'juju run' instead.
+export OS_PROJECT_DOMAIN_ID=$(juju run -m "$juju_model" --unit mysql/0 MYSQL_PWD="$mysql_auth $mysql_cmd_prefix -e 'select id from project where name=\"$OS_USER_DOMAIN_NAME\";' keystone" | tr -d \\r)
+export OS_PROJECT_ID=$(juju run -m "$juju_model" --unit mysql/0 MYSQL_PWD="$mysql_auth $mysql_cmd_prefix -e 'select id from project where domain_id=\"$OS_PROJECT_DOMAIN_ID\";' keystone" | tr -d \\r)
+
+# Unset potential empty variable
+if [ -z "$OS_PROJECT_DOMAIN_ID" ]; then 
+    unset OS_PROJECT_DOMAIN_ID; 
+fi
+
+export OS_USERNAME="admin"
+export OS_PASSWORD=$(juju run -m "$juju_model" --unit keystone/0 leader-get admin_passwd)
+
+# If your configuration has multiple regions, we set that information here.
+# OS_REGION_NAME is optional and only valid in certain environments.
+export OS_REGION_NAME="RegionOne"
+
+# Unset potential empty variable
+if [ -z "$OS_REGION_NAME" ]; then 
+    unset OS_REGION_NAME; 
+fi
+
+export OS_INTERFACE=public
+export OS_IDENTITY_API_VERSION=3
