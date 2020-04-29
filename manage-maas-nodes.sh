@@ -8,12 +8,12 @@ compute="maas-node"
 node_count=20
 node_start=1
 node_cpus=4
-node_ram=8192
+node_ram=4096
 nic_model="virtio"
 network="maas"
-d1=20
-d2=50
-d3=50
+d1=50
+d2=100
+d3=100
 
 create_vms() {
 	create_storage & build_vms
@@ -62,8 +62,8 @@ build_vms() {
 	                --disk path="$storage_path/$virt_node/$virt_node-d2.img,format=$storage_format,size=$d2,bus=$bus,io=native,cache=directsync" \
 	                --disk path="$storage_path/$virt_node/$virt_node-d3.img,format=$storage_format,size=$d3,bus=$bus,io=native,cache=directsync" \
                         --network=network=$network,mac="$macaddr1",model=$nic_model \
-                        --network=network=$network,mac="$macaddr2",model=$nic_model > "$virt_node.xml"
-	        virsh define "$virt_node.xml"
+                        --network=network=$network,mac="$macaddr2",model=$nic_model > "$virt_node.xml" &&
+	        virsh define "$virt_node.xml" &
 	        # virsh start "$virt_node"
 	done
 }
