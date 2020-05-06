@@ -50,6 +50,7 @@ init_variables() {
 
     virsh_chassis="qemu+ssh://${virsh_user}@${maas_system_ip}/system"
 
+    dependencies=(moreutils uuid jq)
     maas_packages=(maas maas-cli maas-proxy maas-dhcp maas-dns maas-rack-controller maas-region-api maas-common)
     pg_packages=(postgresql-10 postgresql-client postgresql-client-common postgresql-common)
 }
@@ -71,7 +72,7 @@ remove_maas() {
 
 install_maas() {
     # This is separate from the removal, so we can handle them atomically
-    sudo eatmydata apt-get -fuy --reinstall install "${maas_packages[@]}" "${pg_packages[@]}"
+    sudo eatmydata apt-get -fuy --reinstall install "${dependencies[@]}" "${maas_packages[@]}" "${pg_packages[@]}"
     sudo sed -i 's/DISPLAY_LIMIT=5/DISPLAY_LIMIT=100/' /usr/share/maas/web/static/js/bundle/maas-min.js
 }
 
