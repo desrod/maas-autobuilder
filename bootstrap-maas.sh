@@ -1,6 +1,6 @@
 #!/bin/bash 
 
-required_bins=( ip jq sudo eatmydata uuid debconf-set-selections ifdata )
+required_bins=( ip jq sudo uuid debconf-set-selections ifdata )
 
 check_bins() {
 
@@ -17,29 +17,23 @@ check_bins() {
     done
 }
 
+read_config() {
+    shopt -s extglob
+    maas_config="maas.config"
+    source "$maas_config"
+}
+
 # Initialize some vars we'll reuse later in the build, bootstrap
 init_variables() {
-    # This is the user who 'maas' uses when commissioning nodes
-    virsh_user="ubuntu"
-    maas_profile="admin"
-    maas_pass="openstack"
-
-    # This is the user whose keys get imported into maas by default
-    launchpad_user="setuid"
-
-    maas_system_ip="$(hostname -I | awk '{print $1}')"
+    # maas_system_ip="$(hostname -I | awk '{print $1}')"
 
     # This is an ugly hack, but it works to get the IP of the primary virtual bridge interface
-    maas_bridge_ip=$(ifdata -pa virbr0)
+    # maas_bridge_ip=$(ifdata -pa virbr0)
     # maas_bridge_ip="$(ip -json a | jq -r '.[] | select(.ifname | tostring | contains("virbr0")) | .addr_info[].local')"
     # maas_bridge_ip="$(ip a s virbr0 | awk '/inet/ {print $2}' | cut -d/ -f1)"
-    maas_endpoint="http://$maas_bridge_ip:5240/MAAS"
+    # maas_endpoint="http://$maas_bridge_ip:5240/MAAS"
 
     # This is the proxy that MAAS itself uses (the "internal" MAAS proxy)
-    squid_proxy="http://192.168.100.10:3128"
-    maas_local_proxy="http://$maas_bridge_ip:8000"
-    maas_upstream_dns="1.1.1.1 4.4.4.4 8.8.8.8"
-    maas_ip_range=192.168.100
     # no_proxy="localhost,127.0.0.1,$maas_system_ip,$(echo $maas_ip_range.{100..200} | sed 's/ /,/g')"
 
     echo "MAAS Endpoint: $maas_endpoint"
@@ -60,8 +54,8 @@ remove_maas() {
     sudo -u postgres psql -c "drop database maasdb"
 
     # Remove everything, start clean and clear from the top
-    eatmydata -- sudo DEBIAN_FRONTEND=noninteractive apt-get -y remove --purge "${maas_packages[@]}" "${pg_packages[@]}" && \
-    eatmydata -- sudo apt-get -fuy autoremove
+    sudo DEBIAN_FRONTEND=noninteractive apt-get -y remove --purge "${maas_packages[@]}" "${pg_packages[@]}" && \
+    sudo apt-get -fuy autoremove
 
     # Yes, they're removed but we want them PURGED, so this becomes idempotent
     for package in "${maas_packages[@]}" "${pg_packages[@]}"; do
@@ -71,7 +65,7 @@ remove_maas() {
 
 install_maas() {
     # This is separate from the removal, so we can handle them atomically
-    eatmydata -- sudo apt-get -fuy --reinstall install "${maas_packages[@]}" "${pg_packages[@]}"
+    sudo apt-get -fuy --reinstall install "${maas_packages[@]}" "${pg_packages[@]}"
     sudo sed -i 's/DISPLAY_LIMIT=5/DISPLAY_LIMIT=100/' /usr/share/maas/web/static/js/bundle/maas-min.js
 }
 
@@ -98,7 +92,10 @@ build_maas() {
     sudo chsh -s /bin/bash maas
     sudo chown -R maas:maas /var/lib/maas
 
-    maas_api_key="$(sudo maas-region apikey --username=$maas_profile | tee ~/.maas-api.key)"
+    if [ -f ~/.maas-api.key ]; then 
+        rm ~/.maas-api.key
+        maas_api_key="$(sudo maas-region apikey --username=$maas_profile | tee ~/.maas-api.key)"
+    fi;
 
     # Fetch the MAAS API key, store to a file for later reuse, also set this var to that value
     maas login "$maas_profile" "$maas_endpoint" "$maas_api_key" 
@@ -106,7 +103,7 @@ build_maas() {
     maas_system_id="$(maas $maas_profile nodes read hostname="$HOSTNAME" | jq -r '.[].interface_set[0].system_id')"
 
     # Inject the maas SSH key
-    maas_ssh_key=$(cat ~/.ssh/maas_rsa.pub)
+    maas_ssh_key=$(<~/.ssh/maas_rsa.pub)
     maas $maas_profile sshkeys create "key=$maas_ssh_key"
 
     # Update settings to match our needs
@@ -123,7 +120,8 @@ build_maas() {
     maas $maas_profile maas set-config name=enable_third_party_drivers value=false
     maas $maas_profile maas set-config name=curtin_verbose value=true
 
-    maas $maas_profile boot-source update 1 url=http://"$maas_bridge_ip":8765/maas/images/ephemeral-v3/daily/
+    maas $maas_profile boot-source update 1 url="$maas_boot_source"
+    # maas $maas_profile boot-source update 1 url=http://"$maas_bridge_ip":8765/maas/images/ephemeral-v3/daily/
     # maas $maas_profile package-repository update 1 name='main_archive' url=http://$maas_bridge_ip:8765/mirror/ubuntu
 
     # This is hacky, but it's the only way I could find to reliably get the
@@ -145,6 +143,7 @@ build_maas() {
     # sudo maas-rack config --region-url "http://$maas_bridge_ip:5240/MAAS/" && sudo service maas-rackd restart
     sudo DEBIAN_FRONTEND=noninteractive dpkg-reconfigure maas-rack-controller
     sleep 2
+   
     sudo DEBIAN_FRONTEND=noninteractive dpkg-reconfigure maas-region-controller
     sudo service maas-rackd restart
     sleep 5
@@ -180,9 +179,13 @@ bootstrap_maas() {
 
 # These are for juju, adding a cloud matching the customer/reproducer we need
 add_cloud() {
+
+	if ! [ -x "$(command -v juju)" ]; then
+		sudo snap install juju --channel "$juju_version"
+	fi
 	rand_uuid=$(uuid -F siv)
 	cloud_name="$1"
-	maas_api_key=$(cat ~/.maas-api.key)
+	maas_api_key=$(<~/.maas-api.key)
 
 cat > clouds-"$rand_uuid".yaml <<EOF
 clouds:
@@ -277,6 +280,7 @@ if [ $# -eq 0 ]; then
 fi
 
 init_variables
+read_config
 
 while getopts ":a:bc:ij:nt:r" opt; do
   case $opt in
