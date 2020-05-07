@@ -1,6 +1,6 @@
 #!/bin/bash 
 
-required_bins=( ip jq sudo uuid debconf-set-selections ifdata )
+required_bins=( ip jq sudo eatmydata uuid debconf-set-selections ifdata )
 
 check_bins() {
 
