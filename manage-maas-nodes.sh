@@ -63,8 +63,8 @@ build_vms() {
 	                --disk path="$storage_path/$virt_node/$virt_node-d3.img,format=$storage_format,size=$d3,bus=$bus,io=native,cache=directsync" \
                         --network=network=$network,mac="$macaddr1",model=$nic_model \
                         --network=network=$network,mac="$macaddr2",model=$nic_model > "$virt_node.xml" &&
-	        virsh define "$virt_node.xml" &
-	        # virsh start "$virt_node"
+	        virsh define "$virt_node.xml"
+	        virsh start "$virt_node" &
 	done
 }
 
