@@ -40,7 +40,7 @@ init_variables() {
     maas_local_proxy="http://$maas_bridge_ip:8000"
     maas_upstream_dns="1.1.1.1 4.4.4.4 8.8.8.8"
     maas_ip_range=192.168.100
-    no_proxy="localhost,127.0.0.1,$maas_system_ip,$(echo $maas_ip_range.{100..200} | sed 's/ /,/g')"
+    # no_proxy="localhost,127.0.0.1,$maas_system_ip,$(echo $maas_ip_range.{100..200} | sed 's/ /,/g')"
 
     echo "MAAS Endpoint: $maas_endpoint"
     echo "MAAS Proxy: $maas_local_proxy"
@@ -60,8 +60,8 @@ remove_maas() {
     sudo -u postgres psql -c "drop database maasdb"
 
     # Remove everything, start clean and clear from the top
-    sudo DEBIAN_FRONTEND=noninteractive eatmydata apt-get -y remove --purge "${maas_packages[@]}" "${pg_packages[@]}" && \
-    sudo eatmydata apt-get -fuy autoremove
+    eatmydata -- sudo DEBIAN_FRONTEND=noninteractive apt-get -y remove --purge "${maas_packages[@]}" "${pg_packages[@]}" && \
+    eatmydata -- sudo apt-get -fuy autoremove
 
     # Yes, they're removed but we want them PURGED, so this becomes idempotent
     for package in "${maas_packages[@]}" "${pg_packages[@]}"; do
@@ -71,7 +71,7 @@ remove_maas() {
 
 install_maas() {
     # This is separate from the removal, so we can handle them atomically
-    sudo eatmydata apt-get -fuy --reinstall install "${maas_packages[@]}" "${pg_packages[@]}"
+    eatmydata -- sudo apt-get -fuy --reinstall install "${maas_packages[@]}" "${pg_packages[@]}"
     sudo sed -i 's/DISPLAY_LIMIT=5/DISPLAY_LIMIT=100/' /usr/share/maas/web/static/js/bundle/maas-min.js
 }
 
@@ -113,7 +113,7 @@ build_maas() {
     maas $maas_profile maas set-config name=default_storage_layout value=lvm
     maas $maas_profile maas set-config name=network_discovery value=disabled
     maas $maas_profile maas set-config name=active_discovery_interval value=0
-    maas $maas_profile maas set-config name=kernel_opts value="console=ttyS0,115200 console=tty0,115200 elevator=noop clocksource=tsc zswap.enabled=1 intel_iommu=on iommu=pt debug nosplash scsi_mod.use_blk_mq=1 dm_mod.use_blk_mq=1 enable_mtrr_cleanup mtrr_spare_reg_nr=1 systemd.log_level=debug"
+    maas $maas_profile maas set-config name=kernel_opts value="console=ttyS0,115200 console=tty0,115200 elevator=noop zswap.enabled=1 zswap.compressor=lz4 zswap.max_pool_percent=20 zswap.zpool=z3fold intel_iommu=on iommu=pt debug nosplash scsi_mod.use_blk_mq=1 dm_mod.use_blk_mq=1 enable_mtrr_cleanup mtrr_spare_reg_nr=1 systemd.log_level=debug"
     maas $maas_profile maas set-config name=maas_name value=us-east
     maas $maas_profile maas set-config name=upstream_dns value="$maas_upstream_dns"
     maas $maas_profile maas set-config name=dnssec_validation value=no
@@ -123,14 +123,16 @@ build_maas() {
     maas $maas_profile maas set-config name=enable_third_party_drivers value=false
     maas $maas_profile maas set-config name=curtin_verbose value=true
 
-    maas $maas_profile boot-source update 1 url=http://$maas_bridge_ip:8765/maas/images/ephemeral-v3/daily/
+    maas $maas_profile boot-source update 1 url=http://"$maas_bridge_ip":8765/maas/images/ephemeral-v3/daily/
     # maas $maas_profile package-repository update 1 name='main_archive' url=http://$maas_bridge_ip:8765/mirror/ubuntu
 
     # This is hacky, but it's the only way I could find to reliably get the
     # correct subnet for the maas bridge interface
-    maas $maas_profile subnet update $(maas admin subnets read | jq -rc '.[] | select(.name | contains("192.168.100")) | "\(.id)"') gateway_ip=$maas_bridge_ip
+    maas $maas_profile subnet update "$(maas $maas_profile subnets read | jq -rc --arg maas_ip "$maas_ip_range" '.[] | select(.name | contains($maas_ip)) | "\(.id)"')" gateway_ip="$maas_bridge_ip"
     sleep 3
+
     maas $maas_profile ipranges create type=dynamic start_ip=192.168.100.100 end_ip=192.168.100.200 comment='This is the reserved range for MAAS nodes'
+
     sleep 3
     maas $maas_profile vlan update fabric-1 0 dhcp_on=True primary_rack="$maas_system_id"
 
@@ -145,6 +147,7 @@ build_maas() {
     sleep 2
     sudo DEBIAN_FRONTEND=noninteractive dpkg-reconfigure maas-region-controller
     sudo service maas-rackd restart
+    sleep 5
 }
 
 bootstrap_maas() {
