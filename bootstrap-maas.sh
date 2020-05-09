@@ -18,6 +18,14 @@ check_bins() {
 }
 
 read_config() {
+    if [ ! -f maas.config ]; then
+        printf "Error: missing config file. Please create the file 'maas.config'.\n"
+        exit 1
+    fi
+    if [ ! -f maas.debconf ]; then
+        printf "Error: missing debconf file. Please create the file 'maas.debconf'.\n"
+        exit 1
+    fi
     shopt -s extglob
     maas_config="maas.config"
     source "$maas_config"
@@ -102,9 +110,13 @@ build_maas() {
 
     maas_system_id="$(maas $maas_profile nodes read hostname="$HOSTNAME" | jq -r '.[].interface_set[0].system_id')"
 
+    maas $maas_profile boot-source update 1 url="$maas_boot_source"
     # Inject the maas SSH key
     maas_ssh_key=$(<~/.ssh/maas_rsa.pub)
     maas $maas_profile sshkeys create "key=$maas_ssh_key"
+    # Import the base images; this can take some time
+    echo "Importing boot images, please be patient, this may take some time..."
+    maas $maas_profile boot-resources import
 
     # Update settings to match our needs
     maas $maas_profile maas set-config name=default_storage_layout value=lvm
@@ -120,16 +132,14 @@ build_maas() {
     maas $maas_profile maas set-config name=enable_third_party_drivers value=false
     maas $maas_profile maas set-config name=curtin_verbose value=true
 
-    maas $maas_profile boot-source update 1 url="$maas_boot_source"
-    # maas $maas_profile boot-source update 1 url=http://"$maas_bridge_ip":8765/maas/images/ephemeral-v3/daily/
-    # maas $maas_profile package-repository update 1 name='main_archive' url=http://$maas_bridge_ip:8765/mirror/ubuntu
+    maas $maas_profile package-repository update 1 name='main_archive' url="$package_repository"
 
     # This is hacky, but it's the only way I could find to reliably get the
     # correct subnet for the maas bridge interface
     maas $maas_profile subnet update "$(maas $maas_profile subnets read | jq -rc --arg maas_ip "$maas_ip_range" '.[] | select(.name | contains($maas_ip)) | "\(.id)"')" gateway_ip="$maas_bridge_ip"
     sleep 3
 
-    maas $maas_profile ipranges create type=dynamic start_ip=192.168.100.100 end_ip=192.168.100.200 comment='This is the reserved range for MAAS nodes'
+    maas $maas_profile ipranges create type=dynamic start_ip=$maas_start_ip end_ip=$maas_end_ip comment='This is the reserved range for MAAS nodes'
 
     sleep 3
     maas $maas_profile vlan update fabric-1 0 dhcp_on=True primary_rack="$maas_system_id"
@@ -150,9 +160,6 @@ build_maas() {
 }
 
 bootstrap_maas() {
-    # Import the base images; this can take some time
-    echo "Importing boot images, please be patient, this may take some time..."
-    maas $maas_profile boot-resources import
 
     until [ "$(maas $maas_profile boot-resources is-importing)" = false ]; do sleep 3; done;
 
@@ -161,7 +168,7 @@ bootstrap_maas() {
 
     # This is necessary to allow MAAS to quiesce the imported chassis
     echo "Pausing while chassis is imported..."
-    sleep 10
+    sleep 20
 
     # Commission those nodes (requires that image import step has completed)
     maas $maas_profile machines accept-all
@@ -279,8 +286,8 @@ if [ $# -eq 0 ]; then
   exit 0
 fi
 
-init_variables
 read_config
+init_variables
 
 while getopts ":a:bc:ij:nt:r" opt; do
   case $opt in
