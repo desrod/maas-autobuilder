@@ -1,4 +1,4 @@
-#!/bin/bash 
+#!/bin/bash
 
 required_bins=( ip jq sudo uuid debconf-set-selections ifdata )
 
@@ -8,7 +8,7 @@ check_bins() {
     if [[ $1 ]]; then
             required_bins+=("$1")
     fi
-    
+
     for binary in "${required_bins[@]}"; do
         if ! [ -x "$(command -v "$binary")" ]; then
             printf "Error: Necessary program '%s' is not installed. Please fix, aborting now.\n\n" "$binary" >&2
@@ -106,7 +106,7 @@ build_maas() {
     fi;
 
     # Fetch the MAAS API key, store to a file for later reuse, also set this var to that value
-    maas login "$maas_profile" "$maas_endpoint" "$maas_api_key" 
+    maas login "$maas_profile" "$maas_endpoint" "$maas_api_key"
 
     maas_system_id="$(maas $maas_profile nodes read hostname="$HOSTNAME" | jq -r '.[].interface_set[0].system_id')"
 
@@ -147,13 +147,13 @@ build_maas() {
     # This is needed, because it points to localhost by default and will fail to 
     # commission/deploy in this state
     echo "DEBUG: http://$maas_bridge_ip:5240/MAAS/"
-    
+
     sudo debconf-set-selections maas.debconf
     sleep 2
     # sudo maas-rack config --region-url "http://$maas_bridge_ip:5240/MAAS/" && sudo service maas-rackd restart
     sudo DEBIAN_FRONTEND=noninteractive dpkg-reconfigure maas-rack-controller
     sleep 2
-   
+
     sudo DEBIAN_FRONTEND=noninteractive dpkg-reconfigure maas-region-controller
     sudo service maas-rackd restart
     sleep 5
@@ -219,7 +219,7 @@ credentials:
       $cloud_name:
         $cloud_name-auth:
           auth-type: oauth1
-          maas-oauth: $maas_api_key 
+          maas-oauth: $maas_api_key
 EOF
 
 cat > config-"$rand_uuid".yaml <<EOF
@@ -234,7 +234,7 @@ apt-https-proxy: $squid_proxy
 transmit-vendor-metrics: false
 EOF
 
-    echo "Adding cloud............: $cloud_name" 
+    echo "Adding cloud............: $cloud_name"
     # juju add-cloud --replace "$cloud_name" clouds-"$rand_uuid".yaml
     juju update-cloud "$cloud_name" -f clouds-"$rand_uuid".yaml
 
@@ -246,7 +246,7 @@ EOF
     juju clouds --format json | jq --arg cloud "$cloud_name" '.[$cloud]'
 
     juju bootstrap "$cloud_name" --debug --config=config-"$rand_uuid".yaml
-    
+
     # Since we created ephemeral files, let's wipe them out. Comment if you want to keep them around
     if [[ $? = 0 ]]; then
 	rm -f clouds-"$rand_uuid".yaml credentials-"$rand_uuid".yaml config-"$rand_uuid".yaml
