@@ -122,7 +122,7 @@ build_maas() {
     maas $maas_profile subnet update "$(maas $maas_profile subnets read | jq -rc --arg maas_ip "$maas_ip_range" '.[] | select(.name | contains($maas_ip)) | "\(.id)"')" gateway_ip="$maas_bridge_ip"
     sleep 3
 
-    maas $maas_profile ipranges create type=dynamic start_ip=192.168.100.100 end_ip=192.168.100.200 comment='This is the reserved range for MAAS nodes'
+    maas $maas_profile ipranges create type=dynamic start_ip="$maas_subnet_start" end_ip="$maas_subnet_end" comment='This is the reserved range for MAAS nodes'
 
     sleep 3
     maas $maas_profile vlan update fabric-1 0 dhcp_on=True primary_rack="$maas_system_id"
