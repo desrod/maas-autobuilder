@@ -33,22 +33,9 @@ read_config() {
 
 # Initialize some vars we'll reuse later in the build, bootstrap
 init_variables() {
-    # maas_system_ip="$(hostname -I | awk '{print $1}')"
-
-    # This is an ugly hack, but it works to get the IP of the primary virtual bridge interface
-    # maas_bridge_ip=$(ifdata -pa virbr0)
-    # maas_bridge_ip="$(ip -json a | jq -r '.[] | select(.ifname | tostring | contains("virbr0")) | .addr_info[].local')"
-    # maas_bridge_ip="$(ip a s virbr0 | awk '/inet/ {print $2}' | cut -d/ -f1)"
-    # maas_endpoint="http://$maas_bridge_ip:5240/MAAS"
-
-    # This is the proxy that MAAS itself uses (the "internal" MAAS proxy)
-    # no_proxy="localhost,127.0.0.1,$maas_system_ip,$(echo $maas_ip_range.{100..200} | sed 's/ /,/g')"
 
     echo "MAAS Endpoint: $maas_endpoint"
     echo "MAAS Proxy: $maas_local_proxy"
-
-    # This is an upstream, peer proxy that MAAS may need to talk to (tinyproxy in this case)
-    # maas_upstream_proxy="http://$maas_system_ip:8888"
 
     virsh_chassis="qemu+ssh://${virsh_user}@${maas_system_ip}/system"
 
@@ -100,7 +87,7 @@ build_maas() {
     sudo chsh -s /bin/bash maas
     sudo chown -R maas:maas /var/lib/maas
 
-    if [ -f ~/.maas-api.key ]; then 
+    if [ -f ~/.maas-api.key ]; then
         rm ~/.maas-api.key
         maas_api_key="$(sudo maas-region apikey --username=$maas_profile | tee ~/.maas-api.key)"
     fi;
@@ -203,12 +190,12 @@ clouds:
     # endpoint: ${maas_endpoint:0:-8}
     endpoint: $maas_endpoint
     config:
-      # apt-mirror: http://192.168.100.1:8765/mirror/ubuntu/
+      apt-mirror: $package_repository
       apt-http-proxy: $squid_proxy
       apt-https-proxy: $squid_proxy
       snap-http-proxy: $squid_proxy
       snap-https-proxy: $squid_proxy
-      snap-store-proxy: $squid_proxy
+      snap-store-proxy: $snap_store_proxy
       enable-os-refresh-update: true
       enable-os-upgrade: false
       logging-config: <root>=DEBUG
