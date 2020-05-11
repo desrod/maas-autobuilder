@@ -192,7 +192,7 @@ clouds:
       apt-https-proxy: $squid_proxy
       snap-http-proxy: $squid_proxy
       snap-https-proxy: $squid_proxy
-      snap-store-proxy: $squid_proxy
+      # snap-store-proxy: $snap_store_proxy
       enable-os-refresh-update: true
       enable-os-upgrade: false
       logging-config: <root>=DEBUG
