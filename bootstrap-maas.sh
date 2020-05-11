@@ -18,9 +18,19 @@ check_bins() {
 }
 
 read_config() {
-    shopt -s extglob
-    maas_config="maas.config"
-    source "$maas_config"
+    if [ ! -f maas.config ]; then
+        printf "Error: missing config file. Please create the file 'maas.config'.\n"
+        exit 1
+    else
+        shopt -s extglob
+        maas_config="maas.config"
+        source "$maas_config"
+    fi
+    if [ ! -f maas.debconf ]; then
+        printf "Error: missing debconf file. Please create the file 'maas.debconf'.\n"
+        exit 1
+    fi
+    
 }
 
 # Initialize some vars we'll reuse later in the build, bootstrap
