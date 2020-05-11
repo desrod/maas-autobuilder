@@ -36,8 +36,6 @@ init_variables() {
     echo "MAAS Endpoint: $maas_endpoint"
     echo "MAAS Proxy: $maas_local_proxy"
 
-    virsh_chassis="qemu+ssh://${virsh_user}@${maas_system_ip}/system"
-
     core_packages=(jq moreutils uuid)
     maas_packages=(maas maas-cli maas-proxy maas-dhcp maas-dns maas-rack-controller maas-region-api maas-common)
     pg_packages=(postgresql-10 postgresql-client postgresql-client-common postgresql-common)
@@ -273,6 +271,7 @@ if [ $# -eq 0 ]; then
   exit 0
 fi
 
+# Load up some initial variables from the config and package arrays
 init_variables
 read_config
 
