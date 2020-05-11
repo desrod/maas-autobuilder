@@ -1,6 +1,6 @@
 #!/bin/bash 
 
-required_bins=( ip jq sudo uuid debconf-set-selections ifdata )
+required_bins=( ip jq sudo uuid debconf-set-selections )
 
 check_bins() {
 
@@ -25,25 +25,12 @@ read_config() {
 
 # Initialize some vars we'll reuse later in the build, bootstrap
 init_variables() {
-    # maas_system_ip="$(hostname -I | awk '{print $1}')"
-
-    # This is an ugly hack, but it works to get the IP of the primary virtual bridge interface
-    # maas_bridge_ip=$(ifdata -pa virbr0)
-    # maas_bridge_ip="$(ip -json a | jq -r '.[] | select(.ifname | tostring | contains("virbr0")) | .addr_info[].local')"
-    # maas_bridge_ip="$(ip a s virbr0 | awk '/inet/ {print $2}' | cut -d/ -f1)"
-    # maas_endpoint="http://$maas_bridge_ip:5240/MAAS"
-
-    # This is the proxy that MAAS itself uses (the "internal" MAAS proxy)
-    # no_proxy="localhost,127.0.0.1,$maas_system_ip,$(echo $maas_ip_range.{100..200} | sed 's/ /,/g')"
-
     echo "MAAS Endpoint: $maas_endpoint"
     echo "MAAS Proxy: $maas_local_proxy"
 
-    # This is an upstream, peer proxy that MAAS may need to talk to (tinyproxy in this case)
-    # maas_upstream_proxy="http://$maas_system_ip:8888"
-
     virsh_chassis="qemu+ssh://${virsh_user}@${maas_system_ip}/system"
 
+    core_packages=(moreutils)
     maas_packages=(maas maas-cli maas-proxy maas-dhcp maas-dns maas-rack-controller maas-region-api maas-common)
     pg_packages=(postgresql-10 postgresql-client postgresql-client-common postgresql-common)
 }
@@ -65,7 +52,7 @@ remove_maas() {
 
 install_maas() {
     # This is separate from the removal, so we can handle them atomically
-    sudo apt-get -fuy --reinstall install "${maas_packages[@]}" "${pg_packages[@]}"
+    sudo apt-get -fuy --reinstall install "${core_packages} ${maas_packages[@]}" "${pg_packages[@]}"
     sudo sed -i 's/DISPLAY_LIMIT=5/DISPLAY_LIMIT=100/' /usr/share/maas/web/static/js/bundle/maas-min.js
 }
 
@@ -83,8 +70,6 @@ EOF
 }
 
 build_maas() {
-    # maas_endpoint=$(maas list | awk '{print $2}')
-
     # Create the initial 'admin' user of MAAS, purge first!
     purge_admin_user
     sudo maas createadmin --username "$maas_profile" --password "$maas_pass" --email "$maas_profile"@"$maas_pass" --ssh-import lp:"$launchpad_user"
@@ -122,7 +107,7 @@ build_maas() {
 
     maas $maas_profile boot-source update 1 url="$maas_boot_source"
     # maas $maas_profile boot-source update 1 url=http://"$maas_bridge_ip":8765/maas/images/ephemeral-v3/daily/
-    # maas $maas_profile package-repository update 1 name='main_archive' url=http://$maas_bridge_ip:8765/mirror/ubuntu
+    maas $maas_profile package-repository update 1 name='main_archive' url=$package_repository
 
     # This is hacky, but it's the only way I could find to reliably get the
     # correct subnet for the maas bridge interface
@@ -222,6 +207,7 @@ default-series: bionic
 juju-ftp-proxy: $squid_proxy
 juju-http-proxy: $squid_proxy
 juju-https-proxy: $squid_proxy
+juju-no-proxy: $no_proxy
 apt-http-proxy: $squid_proxy
 apt-https-proxy: $squid_proxy
 transmit-vendor-metrics: false
@@ -281,6 +267,9 @@ fi
 
 init_variables
 read_config
+
+# This is the proxy that MAAS itself uses (the "internal" MAAS proxy)
+no_proxy="localhost,127.0.0.1,$maas_system_ip,$(echo $maas_ip_range.{100..200} | sed 's/ /,/g')"
 
 while getopts ":a:bc:ij:nt:r" opt; do
   case $opt in
