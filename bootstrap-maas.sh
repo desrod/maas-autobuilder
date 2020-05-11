@@ -1,14 +1,13 @@
 #!/bin/bash 
 
-required_bins=( ip jq sudo uuid debconf-set-selections )
+required_bins=( ip sudo debconf-set-selections )
 
 check_bins() {
-
     # Append any needed binaries we need to check for, to our list
     if [[ $1 ]]; then
             required_bins+=("$1")
     fi
-    
+
     for binary in "${required_bins[@]}"; do
         if ! [ -x "$(command -v "$binary")" ]; then
             printf "Error: Necessary program '%s' is not installed. Please fix, aborting now.\n\n" "$binary" >&2
@@ -30,7 +29,6 @@ read_config() {
         printf "Error: missing debconf file. Please create the file 'maas.debconf'.\n"
         exit 1
     fi
-    
 }
 
 # Initialize some vars we'll reuse later in the build, bootstrap
@@ -40,7 +38,7 @@ init_variables() {
 
     virsh_chassis="qemu+ssh://${virsh_user}@${maas_system_ip}/system"
 
-    core_packages=(moreutils)
+    core_packages=(jq moreutils uuid)
     maas_packages=(maas maas-cli maas-proxy maas-dhcp maas-dns maas-rack-controller maas-region-api maas-common)
     pg_packages=(postgresql-10 postgresql-client postgresql-client-common postgresql-common)
 }
@@ -87,13 +85,13 @@ build_maas() {
     sudo chsh -s /bin/bash maas
     sudo chown -R maas:maas /var/lib/maas
 
-    if [ -f ~/.maas-api.key ]; then 
+    if [ -f ~/.maas-api.key ]; then
         rm ~/.maas-api.key
         maas_api_key="$(sudo maas-region apikey --username=$maas_profile | tee ~/.maas-api.key)"
     fi;
 
     # Fetch the MAAS API key, store to a file for later reuse, also set this var to that value
-    maas login "$maas_profile" "$maas_endpoint" "$maas_api_key" 
+    maas login "$maas_profile" "$maas_endpoint" "$maas_api_key"
 
     maas_system_id="$(maas $maas_profile nodes read hostname="$HOSTNAME" | jq -r '.[].interface_set[0].system_id')"
 
@@ -117,7 +115,7 @@ build_maas() {
 
     maas $maas_profile boot-source update 1 url="$maas_boot_source"
     # maas $maas_profile boot-source update 1 url=http://"$maas_bridge_ip":8765/maas/images/ephemeral-v3/daily/
-    maas $maas_profile package-repository update 1 name='main_archive' url=$package_repository
+    maas $maas_profile package-repository update 1 name='main_archive' url="$package_mirror"
 
     # This is hacky, but it's the only way I could find to reliably get the
     # correct subnet for the maas bridge interface
@@ -132,13 +130,13 @@ build_maas() {
     # This is needed, because it points to localhost by default and will fail to 
     # commission/deploy in this state
     echo "DEBUG: http://$maas_bridge_ip:5240/MAAS/"
-    
+
     sudo debconf-set-selections maas.debconf
     sleep 2
     # sudo maas-rack config --region-url "http://$maas_bridge_ip:5240/MAAS/" && sudo service maas-rackd restart
     sudo DEBIAN_FRONTEND=noninteractive dpkg-reconfigure maas-rack-controller
     sleep 2
-   
+
     sudo DEBIAN_FRONTEND=noninteractive dpkg-reconfigure maas-region-controller
     sudo service maas-rackd restart
     sleep 5
@@ -166,7 +164,7 @@ bootstrap_maas() {
     # maas "$maas_profile" machine commission -d "$maas_node"
 
     # Acquire all images marked "Ready"
-    maas $maas_profile machines allocate	
+    maas $maas_profile machines allocate
 
     # Deploy the node you just commissioned and acquired
     # maas "$maas_profile" machine deploy $maas_node
@@ -191,7 +189,7 @@ clouds:
     # endpoint: ${maas_endpoint:0:-8}
     endpoint: $maas_endpoint
     config:
-      # apt-mirror: http://192.168.100.1:8765/mirror/ubuntu/
+      # apt-mirror: $package_mirror
       apt-http-proxy: $squid_proxy
       apt-https-proxy: $squid_proxy
       snap-http-proxy: $squid_proxy
@@ -207,7 +205,7 @@ credentials:
       $cloud_name:
         $cloud_name-auth:
           auth-type: oauth1
-          maas-oauth: $maas_api_key 
+          maas-oauth: $maas_api_key
 EOF
 
 cat > config-"$rand_uuid".yaml <<EOF
@@ -223,7 +221,7 @@ apt-https-proxy: $squid_proxy
 transmit-vendor-metrics: false
 EOF
 
-    echo "Adding cloud............: $cloud_name" 
+    echo "Adding cloud............: $cloud_name"
     # juju add-cloud --replace "$cloud_name" clouds-"$rand_uuid".yaml
     juju update-cloud "$cloud_name" -f clouds-"$rand_uuid".yaml
 
@@ -235,7 +233,7 @@ EOF
     juju clouds --format json | jq --arg cloud "$cloud_name" '.[$cloud]'
 
     juju bootstrap "$cloud_name" --debug --config=config-"$rand_uuid".yaml
-    
+
     # Since we created ephemeral files, let's wipe them out. Comment if you want to keep them around
     if [[ $? = 0 ]]; then
 	rm -f clouds-"$rand_uuid".yaml credentials-"$rand_uuid".yaml config-"$rand_uuid".yaml
