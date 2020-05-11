@@ -1,0 +1,7 @@
+# Ubuntu MAAS PXE/Provisioning network address:
+maas-common             maas/default-maas-url           string 192.168.100.1
+maas-region-controller  maas/default-maas-url           string 192.168.100.1
+
+# Ubuntu MAAS API address:
+maas-common             maas-rack-controller/maas-url   string http://192.168.100.1:5240/MAAS
+maas-rack-controller    maas-rack-controller/maas-url   string http://192.168.100.1:5240/MAAS
