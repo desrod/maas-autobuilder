@@ -36,9 +36,9 @@ init_variables() {
     echo "MAAS Endpoint: $maas_endpoint"
     echo "MAAS Proxy: $maas_local_proxy"
 
-    core_packages=(jq moreutils uuid)
-    maas_packages=(maas maas-cli maas-proxy maas-dhcp maas-dns maas-rack-controller maas-region-api maas-common)
-    pg_packages=(postgresql-10 postgresql-client postgresql-client-common postgresql-common)
+    core_packages=( jq moreutils uuid )
+    maas_packages=( maas maas-cli maas-proxy maas-dhcp maas-dns maas-rack-controller maas-region-api maas-common )
+    pg_packages=( postgresql-10 postgresql-client postgresql-client-common postgresql-common )
 }
 
 remove_maas() {
@@ -58,7 +58,7 @@ remove_maas() {
 
 install_maas() {
     # This is separate from the removal, so we can handle them atomically
-    sudo apt-get -fuy --reinstall install "${core_packages} ${maas_packages[@]}" "${pg_packages[@]}"
+    sudo apt-get -fuy --reinstall install "${core_packages}" "${maas_packages[@]}" "${pg_packages[@]}"
     sudo sed -i 's/DISPLAY_LIMIT=5/DISPLAY_LIMIT=100/' /usr/share/maas/web/static/js/bundle/maas-min.js
 }
 
