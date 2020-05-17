@@ -113,7 +113,7 @@ build_maas() {
 
     maas $maas_profile boot-source update 1 url="$maas_boot_source"
     # maas $maas_profile boot-source update 1 url=http://"$maas_bridge_ip":8765/maas/images/ephemeral-v3/daily/
-    maas $maas_profile package-repository update 1 name='main_archive' url="$package_mirror"
+    maas $maas_profile package-repository update 1 name='main_archive' url="$package_repository"
 
     # This is hacky, but it's the only way I could find to reliably get the
     # correct subnet for the maas bridge interface
@@ -187,7 +187,7 @@ clouds:
     # endpoint: ${maas_endpoint:0:-8}
     endpoint: $maas_endpoint
     config:
-      # apt-mirror: $package_mirror
+      apt-mirror: $package_repository
       apt-http-proxy: $squid_proxy
       apt-https-proxy: $squid_proxy
       snap-http-proxy: $squid_proxy
