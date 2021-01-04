@@ -41,8 +41,6 @@ build_vms() {
 	for ((virt="$node_start"; virt<="$node_num"; virt++)); do
 		printf -v virt_node %s-%02d "$compute" "$virt"
 		bus="scsi"
-		macaddr1=$(printf '52:54:00:%02x:%02x:%02x\n' "$((RANDOM%256))" "$((RANDOM%256))" "$((RANDOM%256))")
-		macaddr2=$(printf '52:54:00:%02x:%02x:%02x\n' "$((RANDOM%256))" "$((RANDOM%256))" "$((RANDOM%256))")
 
 		virt-install -v --noautoconsole   \
 			--print-xml               \
@@ -60,8 +58,8 @@ build_vms() {
 			--disk path="$storage_path/$virt_node/$virt_node-d1.img,format=$storage_format,sparse=false,size=$d1,bus=$bus,io=threads,cache=writeback" \
 			--disk path="$storage_path/$virt_node/$virt_node-d2.img,format=$storage_format,sparse=false,size=$d2,bus=$bus,io=threads,cache=writeback" \
 			--disk path="$storage_path/$virt_node/$virt_node-d3.img,format=$storage_format,sparse=false,size=$d3,bus=$bus,io=threads,cache=writeback" \
-			--network=network=$network,mac="$macaddr1",model=$nic_model \
-			--network=network=$network,mac="$macaddr2",model=$nic_model > "$virt_node.xml" &&
+			--network=network=$network,model=$nic_model \
+			--network=network=$network,model=$nic_model > "$virt_node.xml" &&
 			virsh define "$virt_node.xml" &
 		# virsh start "$virt_node" &
 	done
