@@ -109,7 +109,7 @@ version() {
 	printf -- "There is NO WARRANTY, to the extent permitted by law.\n\n"
 }
 
-source "$PWD"/getopt
+source "$PWD"/functions/parseopts.sh
 
 OPT_SHORT='n:cwhV'
 OPT_LONG=('create' 'wipe' 'nodes:' 'cpus:' 'ram:')
