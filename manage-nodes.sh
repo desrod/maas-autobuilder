@@ -109,7 +109,6 @@ version() {
 	printf -- "There is NO WARRANTY, to the extent permitted by law.\n\n"
 }
 
-# Quote expansions here. {} isn't necessary.
 source "$PWD"/getopt
 
 OPT_SHORT='n:cwhV'
@@ -123,18 +122,14 @@ unset OPT_SHORT OPT_LONG OPTRET
 
 # Bash can use (( arithmetic )) context here.
 if (( $# <= 1 )); then
-    # This is an error condition, so output goes to stderr and exit is non-zero.
     usage >&2
     exit 1
 else
-    # Defaults can be added explicitly like this.  Or... \1
-    cpus=4
     while true; do
-        # Quotes not needed in case here.
         case $1 in
             -c|--create)  mode=create;;
-            --cpus)       cpus=$2; shift ;;
-            --ram)        ram=${2:-4096}; shift ;;  # Defaults can be added on assignment.  Or... \2
+            --cpus)       node_cpus=$2; shift ;;
+            --ram)        node_ram=${2:-4096}; shift ;; 
             -w|--wipe)    mode=wipe;;
             -n|--nodes)   node_num=$2; shift ;;
             -h|--help)    usage; exit 0 ;;
@@ -145,7 +140,7 @@ else
     done
 
     if [[ $mode ]]; then
-        "$mode"_vms "$node_num" "${cpus:-4}" "$ram"  # Defaults can be added at the call site. \3
+        "$mode"_vms "$node_num" "${cpus:-4}" "$ram" 
     fi
 fi
 
