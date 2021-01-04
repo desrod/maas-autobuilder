@@ -22,7 +22,7 @@ create_vms() {
 
 
 wipe_vms() {
-	destroy_vms "$1"
+	destroy_vms "${node_num}"
 }
 
 
@@ -48,9 +48,9 @@ build_vms() {
 			--boot network,hd,menu=on \
 			--video qxl,vram=256      \
 			--channel spicevmc        \
-			--name "${virt_node}"       \
-			--ram "${node_ram}"         \
-			--vcpus "${node_cpus}"      \
+			--name "${virt_node}"     \
+			--ram "${node_ram}"       \
+			--vcpus "${node_cpus}"    \
 			--console pty,target_type=serial \
 			--graphics spice,clipboard_copypaste=no,mouse_mode=client,filetransfer_enable=off \
 			--cpu host-passthrough,cache.mode=passthrough  \
@@ -101,7 +101,7 @@ usage() {
 }  
 
 version() {
-	printf "manage-nodes -- v${version}\n"
+	printf "manage-nodes -- v%s\n", ${version}
 	printf -- "Copyright(c) 2016-2021 David A. Desrosiers <david.desrosiers@canonical.com>\n\n"
 	printf -- "This is free software; see the source for copying conditions.\n"
 	printf -- "There is NO WARRANTY, to the extent permitted by law.\n\n"
@@ -127,7 +127,7 @@ else
         case $1 in
             -c|--create)  mode=create;;
             --cpus)       node_cpus=$2; shift ;;
-            --ram)        node_ram=${2:-4096}; shift ;; 
+            --ram)        node_ram=$2; shift ;; 
             -w|--wipe)    mode=wipe;;
             -n|--nodes)   node_num=$2; shift ;;
             -h|--help)    usage; exit 0 ;;
@@ -138,7 +138,7 @@ else
     done
 
     if [[ $mode ]]; then
-        "$mode"_vms "$node_num" "${cpus:-4}" "$ram" 
+        "$mode"_vms "$node_num" "${node_cpus}" "${node_ram}" 
     fi
 fi
 
