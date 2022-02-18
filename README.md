@@ -34,8 +34,8 @@ welcome, of course.
 
 ## Installing and testing MAAS 
 
-Just run `./bootstrap-maas.sh` with the appropriate option above. 
-Minimally, you'll want to use `./bootstrap-maas.sh -b` or `-i` to install
+Just run './bootstrap-maas.sh' with the appropriate option above. 
+Minimally, you'll want to use './bootstra-maas.sh -b' or '-i' to install
 just the components needed.
 
 I've done all the work needed to make this as idempotent as possible.  It

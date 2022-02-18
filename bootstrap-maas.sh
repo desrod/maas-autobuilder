@@ -101,7 +101,7 @@ build_maas() {
     maas $maas_profile maas set-config name=default_storage_layout value=lvm
     maas $maas_profile maas set-config name=network_discovery value=disabled
     maas $maas_profile maas set-config name=active_discovery_interval value=0
-    maas $maas_profile maas set-config name=kernel_opts value="console=ttyS0,115200 console=tty0,115200 elevator=noop zswap.enabled=1 zswap.compressor=lz4 zswap.max_pool_percent=20 zswap.zpool=z3fold intel_iommu=on iommu=pt debug nosplash scsi_mod.use_blk_mq=1 dm_mod.use_blk_mq=1 enable_mtrr_cleanup mtrr_spare_reg_nr=1 systemd.log_level=debug"
+    maas $maas_profile maas set-config name=kernel_opts value="console=ttyS0,115200 console=tty0,115200 elevator=none zswap.enabled=1 zswap.compressor=lz4 zswap.max_pool_percent=20 zswap.zpool=z3fold intel_iommu=on iommu=pt debug nosplash scsi_mod.use_blk_mq=1 dm_mod.use_blk_mq=1 enable_mtrr_cleanup mtrr_spare_reg_nr=1 systemd.log_level=debug"
     maas $maas_profile maas set-config name=maas_name value=us-east
     maas $maas_profile maas set-config name=upstream_dns value="$maas_upstream_dns"
     maas $maas_profile maas set-config name=dnssec_validation value=no
@@ -118,12 +118,12 @@ build_maas() {
     # This is hacky, but it's the only way I could find to reliably get the
     # correct subnet for the maas bridge interface
     maas $maas_profile subnet update "$(maas $maas_profile subnets read | jq -rc --arg maas_ip "$maas_ip_range" '.[] | select(.name | contains($maas_ip)) | "\(.id)"')" gateway_ip="$maas_bridge_ip"
-    sleep 3
+    sleep 5
 
     maas $maas_profile ipranges create type=dynamic start_ip="$maas_subnet_start" end_ip="$maas_subnet_end" comment='This is the reserved range for MAAS nodes'
 
-    sleep 3
-    maas $maas_profile vlan update fabric-1 0 dhcp_on=True primary_rack="$maas_system_id"
+    sleep 5
+    maas $maas_profile vlan update fabric-6 0 dhcp_on=True primary_rack="$maas_system_id"
 
     # This is needed, because it points to localhost by default and will fail to 
     # commission/deploy in this state
@@ -177,6 +177,7 @@ add_cloud() {
 	rand_uuid=$(uuid -F siv)
 	cloud_name="$1"
 	maas_api_key=$(<~/.maas-api.key)
+	mitm_cert=$(<squid-mitm-ssl.cert)
 
 cat > clouds-"$rand_uuid".yaml <<EOF
 clouds:
@@ -187,15 +188,21 @@ clouds:
     # endpoint: ${maas_endpoint:0:-8}
     endpoint: $maas_endpoint
     config:
+      package_update: true
+      package_upgrade: true
       apt-mirror: $package_repository
       apt-http-proxy: $squid_proxy
       apt-https-proxy: $squid_proxy
+      apt-no-proxy: $no_proxy
       snap-http-proxy: $squid_proxy
       snap-https-proxy: $squid_proxy
       # snap-store-proxy: $snap_store_proxy
       enable-os-refresh-update: true
       enable-os-upgrade: false
       logging-config: <root>=DEBUG
+    ca-certificates:
+      - |
+${mitm_cert}
 EOF
 
 cat > credentials-"$rand_uuid".yaml <<EOF
@@ -207,6 +214,7 @@ credentials:
 EOF
 
 cat > config-"$rand_uuid".yaml <<EOF
+#cloud-config
 automatically-retry-hooks: true
 mongo-memory-profile: default
 default-series: bionic
@@ -216,7 +224,16 @@ juju-https-proxy: $squid_proxy
 juju-no-proxy: $no_proxy
 apt-http-proxy: $squid_proxy
 apt-https-proxy: $squid_proxy
+apt-no-proxy: $no_proxy
 transmit-vendor-metrics: false
+cloudinit-userdata: |
+  preruncmd:
+    - bash -c "echo http_proxy=$squid_proxy >> /etc/environment";
+    - bash -c "echo https_proxy=$squid_proxy >> /etc/environment";
+  ca-certs:
+    trusted: 
+      - |
+${mitm_cert}
 EOF
 
     echo "Adding cloud............: $cloud_name"
@@ -237,7 +254,7 @@ EOF
 	rm -f clouds-"$rand_uuid".yaml credentials-"$rand_uuid".yaml config-"$rand_uuid".yaml
     fi
 
-    juju enable-ha
+    juju enable-ha -n 3
     juju machines -m controller
 }
 
@@ -276,7 +293,7 @@ init_variables
 read_config
 
 # This is the proxy that MAAS itself uses (the "internal" MAAS proxy)
-no_proxy="localhost,127.0.0.1,$maas_system_ip,$(echo $maas_ip_range.{100..200} | sed 's/ /,/g')"
+no_proxy="192.168.,localhost,127.0.0.1,$maas_system_ip" # ,$(echo $maas_ip_range.{50..250} | sed 's/ /,/g')"
 
 while getopts ":a:bc:ij:nt:r" opt; do
   case $opt in
