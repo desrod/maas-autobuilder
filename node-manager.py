@@ -92,7 +92,7 @@ def create_storage(conn, machine):
 
 
 ############################################################################################
-def create_machines(conn, start, end, memory, vcpu, network):
+def create_machines(conn, start, end, memory, vcpu, network, nic):
     for node in tqdm(range(start, end + 1)):
         machine = f"{node_name}-{node:0{2 if len(str(end)) < 2 else len(str(end))}d}"
         machine_path = f"{storage_path}/{machine}"
@@ -104,13 +104,15 @@ def create_machines(conn, start, end, memory, vcpu, network):
         template = node_xml.format(machine=machine, 
                               vcpu=vcpu, 
                               memory=memory_kb,
-                              machine_path=machine_path, 
-                              mac1=RandMac('00:00:00:00:00:00', True),
+                              machine_path=machine_path,
+                              mac1=RandMac('00:00:00:00:00:00', False),
+                              mac2=RandMac('00:00:00:00:00:00', False),
                               network=network,
-                              mac2=RandMac('00:00:00:00:00:00', True)
+                              nic=nic,
                               )
 
         # print(f"Defined template for {machine} out of {end} total. ({end - node} remaining)")
+        # print(template)
         conn.defineXML(template)
 
 
@@ -153,10 +155,11 @@ def destroy_machines(conn, start, end):
 @click.option("-s", "--start", type=int, is_eager=True, default=1, help="First node is 'x'")
 @click.option("-e", "--end", type=int, default=None, callback=validate_range, help="Last node is 'y'")
 @click.option("-m", "--memory", type=int, default=1024, help="How much memory to allocate (eg: 1024, 2048, 4096)") 
-@click.option("-n", "--network", default='maas', help="Which network to place these nodes on [default: 'maas']") 
+@click.option("-n", "--network", default='maas', help="Which network to place these nodes on [default: 'maas']")
+@click.option("-N", "--nic", default='virtio', help="Which network interface to use [default: 'virtio']")
 @click.option("--vcpu", type=int, default=1, help="How many vCPUs to give each node")
 @click.option("-d", "--debug", is_flag=True, help="Increase debug verbosity for all outputs - [disabled]")
-def main(create, wipe, debug, count, start, end, memory, vcpu, network):
+def main(create, wipe, debug, count, start, end, memory, vcpu, network, nic):
 
     total_machines = count
     if start > 1 and not end:
@@ -171,7 +174,7 @@ def main(create, wipe, debug, count, start, end, memory, vcpu, network):
 
     if create:
         print(f"Creating a total of {total_machines} machines from {start} to {end}")
-        create_machines(conn, start, end, memory, vcpu, network)
+        create_machines(conn, start, end, memory, vcpu, network, nic)
 
     if wipe:
         print(f"Destroying a total of {total_machines} machines from {start} to {end}")
@@ -186,8 +189,10 @@ node_xml = """
 <memory unit="KiB">{memory}</memory>
 <currentMemory unit="KiB">{memory}</currentMemory>
 <vcpu placement="static">{vcpu}</vcpu>
+<iothreads>40</iothreads>
 <os>
-    <type arch="x86_64" machine="pc-i440fx-disco">hvm</type>
+    <type arch="x86_64" machine="q35">hvm</type>
+    <loader readonly='yes' type='rom'>/usr/share/ovmf/OVMF.fd</loader>
     <boot dev="network" />
     <boot dev="hd" />
     <bootmenu enable="yes" />
@@ -195,10 +200,23 @@ node_xml = """
 <features>
     <acpi />
     <apic />
+    <hap />
     <vmport state="off" />
+    <kvm>
+        <hidden state='on'/>
+        <hint-dedicated state='on'/>
+    </kvm>
 </features>
-<cpu mode="host-passthrough" check="none">
+<cpu mode="host-passthrough" check="partial" migratable="on">
     <cache mode="passthrough" />
+    <model name="Westmere"/>
+    <topology sockets='1' dies='1' cores='{vcpu}' threads='1'/>
+    <feature name="pcid" policy="require"/>
+    <features>
+      <kvm>
+        <cpu-pm state='on'/>
+      </kvm>
+    </features>
 </cpu>
 <clock offset="utc">
     <timer name="rtc" tickpolicy="catchup" />
@@ -215,19 +233,19 @@ node_xml = """
 <devices>
     <emulator>/usr/bin/qemu-system-x86_64</emulator>
     <disk type="file" device="disk">
-        <driver name="qemu" type="qcow2" cache="writeback" io="threads" />
+        <driver name="qemu" type="qcow2" cache="directsync" io="native" discard="unmap" />
         <source file="{machine_path}/{machine}-d1.img" />
         <target dev="sda" bus="scsi" />
         <address type="drive" controller="0" bus="0" target="0" unit="0" />
     </disk>
     <disk type="file" device="disk">
-        <driver name="qemu" type="qcow2" cache="writeback" io="threads" />
+        <driver name="qemu" type="qcow2" cache="directsync" io="native" discard="unmap"  />
         <source file="{machine_path}/{machine}-d2.img" />
         <target dev="sdb" bus="scsi" />
         <address type="drive" controller="0" bus="0" target="0" unit="1" />
     </disk>
     <disk type="file" device="disk">
-        <driver name="qemu" type="qcow2" cache="writeback" io="threads" />
+        <driver name="qemu" type="qcow2" cache="directsync" io="native" discard="unmap" />
         <source file="{machine_path}/{machine}-d3.img" />
         <target dev="sdc" bus="scsi" />
         <address type="drive" controller="0" bus="0" target="0" unit="2" />
@@ -250,20 +268,28 @@ node_xml = """
         <master startport="4" />
         <address type="pci" domain="0x0000" bus="0x00" slot="0x07" function="0x2" />
     </controller>
-    <controller type="pci" index="0" model="pci-root" />
+    <controller type="pci" index="0" model="pcie-root" />
     <controller type="virtio-serial" index="0">
         <address type="pci" domain="0x0000" bus="0x00" slot="0x08" function="0x0" />
     </controller>
     <interface type="network">
         <mac address="{mac1}" />
         <source network="{network}" />
-        <model type="virtio" />
+        <link state="up"/>
+        <mtu size='1500'/>
+        <model type="{nic}" />
+        <driver packed='on' mq='on'/>
+        <driver name='vhost' queues='{vcpu}'/>
         <address type="pci" domain="0x0000" bus="0x00" slot="0x03" function="0x0" />
     </interface>
     <interface type="network">
         <mac address="{mac2}" />
         <source network="{network}" />
-        <model type="virtio" />
+        <link state="down"/>
+        <mtu size='1500'/>
+        <model type="{nic}" />
+        <driver packed='on' mq='on'/>
+        <driver name='vhost' queues='{vcpu}'/>
         <address type="pci" domain="0x0000" bus="0x00" slot="0x04" function="0x0" />
     </interface>
     <serial type="pty">
@@ -306,8 +332,6 @@ node_xml = """
 </devices>
 </domain>
 """
-
-
 
 
 if __name__ == "__main__":
