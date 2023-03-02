@@ -1,6 +1,6 @@
 #!/bin/bash 
 
-required_bins=( ip sudo debconf-set-selections )
+required_bins=( ip jq sudo debconf-set-selections ifdata uuid )
 
 check_bins() {
     # Append any needed binaries we need to check for, to our list
@@ -38,7 +38,9 @@ init_variables() {
 
     core_packages=( jq moreutils uuid )
     maas_packages=( maas maas-cli maas-proxy maas-dhcp maas-dns maas-rack-controller maas-region-api maas-common )
-    pg_packages=( postgresql-10 postgresql-client postgresql-client-common postgresql-common )
+    # maas_packages=( maas maas-rack-controller maas-region-api )
+    # pg_packages=( postgresql-14 postgresql-client postgresql-client-common postgresql-common )
+    pg_packages=( postgresql-12 postgresql-client )
 }
 
 remove_maas() {
@@ -58,8 +60,9 @@ remove_maas() {
 
 install_maas() {
     # This is separate from the removal, so we can handle them atomically
-    sudo apt-get -fuy --reinstall install "${core_packages}" "${maas_packages[@]}" "${pg_packages[@]}"
-    sudo sed -i 's/DISPLAY_LIMIT=5/DISPLAY_LIMIT=100/' /usr/share/maas/web/static/js/bundle/maas-min.js
+    sudo apt-get -fyu install "${core_packages}" "${maas_packages[@]}" "${pg_packages[@]}"
+    # exit
+    # sudo sed -i 's/DISPLAY_LIMIT=5/DISPLAY_LIMIT=100/' /usr/share/maas/web/static/js/bundle/maas-min.js
 }
 
 purge_admin_user() {
@@ -85,13 +88,17 @@ build_maas() {
 
     if [ -f ~/.maas-api.key ]; then
         rm ~/.maas-api.key
-        maas_api_key="$(sudo maas-region apikey --username=$maas_profile | tee ~/.maas-api.key)"
     fi;
+    maas_api_key="$(sudo maas-region apikey --username=$maas_profile | tee ~/.maas-api.key)"
 
-    # Fetch the MAAS API key, store to a file for later reuse, also set this var to that value
+    # Fetch the MAAS API key, store to a file for later reuse, also set this var to that value 
+    sleep 3
+    echo "maas login $maas_profile $maas_endpoint $maas_api_key"
     maas login "$maas_profile" "$maas_endpoint" "$maas_api_key"
 
-    maas_system_id="$(maas $maas_profile nodes read hostname="$HOSTNAME" | jq -r '.[].interface_set[0].system_id')"
+    # maas_system_id="$(maas $maas_profile nodes read hostname="$HOSTNAME" | jq -r '.[].interface_set[0].system_id')"
+
+    maas_system_id="$(maas $maas_profile nodes read | jq -r '.[].system_id')"
 
     # Inject the maas SSH key
     maas_ssh_key=$(<~/.ssh/maas_rsa.pub)
@@ -101,12 +108,14 @@ build_maas() {
     maas $maas_profile maas set-config name=default_storage_layout value=lvm
     maas $maas_profile maas set-config name=network_discovery value=disabled
     maas $maas_profile maas set-config name=active_discovery_interval value=0
-    maas $maas_profile maas set-config name=kernel_opts value="console=ttyS0,115200 console=tty0,115200 elevator=none zswap.enabled=1 zswap.compressor=lz4 zswap.max_pool_percent=20 zswap.zpool=z3fold intel_iommu=on iommu=pt debug nosplash scsi_mod.use_blk_mq=1 dm_mod.use_blk_mq=1 enable_mtrr_cleanup mtrr_spare_reg_nr=1 systemd.log_level=debug"
+    maas $maas_profile maas set-config name=kernel_opts value="console=ttyS0,115200 console=tty0,115200 elevator=mq-deadline fsck.mode=force fsck.repair=yes nosplash iommu=pt kvm_amd.npt=1 kvm_amd.avic=1 intel_iommu=on zswap.enabled=1 zswap.compressor=zstd zswap.max_pool_percent=20 zswap.zpool=z3fold scsi_mod.use_blk_mq=1 dm_mod.use_blk_mq=1 enable_mtrr_cleanup mtrr_spare_reg_nr=1 mitigations=off intel_iommu=on intel_idle.max_cstate=1 intel_pstate=passive clocksource=tsc nohz=off systemd.unified_cgroup_hierarchy=0"
     maas $maas_profile maas set-config name=maas_name value=us-east
     maas $maas_profile maas set-config name=upstream_dns value="$maas_upstream_dns"
     maas $maas_profile maas set-config name=dnssec_validation value=no
     maas $maas_profile maas set-config name=enable_analytics value=false
     maas $maas_profile maas set-config name=enable_http_proxy value=true
+    # maas $maas_profile maas set-config name=node_timeout value=120
+    maas $maas_profile maas set-config name=release_notifications value=false
     # maas $maas_profile maas set-config name=http_proxy value="$squid_proxy"
     maas $maas_profile maas set-config name=enable_third_party_drivers value=false
     maas $maas_profile maas set-config name=curtin_verbose value=true
@@ -118,12 +127,9 @@ build_maas() {
     # This is hacky, but it's the only way I could find to reliably get the
     # correct subnet for the maas bridge interface
     maas $maas_profile subnet update "$(maas $maas_profile subnets read | jq -rc --arg maas_ip "$maas_ip_range" '.[] | select(.name | contains($maas_ip)) | "\(.id)"')" gateway_ip="$maas_bridge_ip"
-    sleep 5
+    sleep 10
 
     maas $maas_profile ipranges create type=dynamic start_ip="$maas_subnet_start" end_ip="$maas_subnet_end" comment='This is the reserved range for MAAS nodes'
-
-    sleep 5
-    maas $maas_profile vlan update fabric-6 0 dhcp_on=True primary_rack="$maas_system_id"
 
     # This is needed, because it points to localhost by default and will fail to 
     # commission/deploy in this state
@@ -137,7 +143,8 @@ build_maas() {
 
     sudo DEBIAN_FRONTEND=noninteractive dpkg-reconfigure maas-region-controller
     sudo service maas-rackd restart
-    sleep 5
+    sleep 10
+    maas $maas_profile vlan update fabric-2 0 dhcp_on=True primary_rack="$maas_system_id"
 }
 
 bootstrap_maas() {
@@ -225,7 +232,15 @@ juju-no-proxy: $no_proxy
 apt-http-proxy: $squid_proxy
 apt-https-proxy: $squid_proxy
 apt-no-proxy: $no_proxy
+disable-telemetry: true
 transmit-vendor-metrics: false
+num-provision-workers: 16
+ssl-hostname-verification: false
+update-status-hook-interval: 2m
+container-image-metadata-url: https://192.168.4.20/mirror/lxc-images/streams/v1/index.json
+container-image-stream: released
+image-metadata-url: https://192.168.4.20/mirror/lxc-images/
+agent-metadata-url: https://192.168.4.20/juju/tools/
 cloudinit-userdata: |
   preruncmd:
     - bash -c "echo http_proxy=$squid_proxy >> /etc/environment";
