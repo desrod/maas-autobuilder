@@ -1,6 +1,8 @@
 #!/bin/bash 
 
-required_bins=( ip jq sudo debconf-set-selections ifdata uuid )
+set -x
+
+required_bins=( ip jq yq sudo debconf-set-selections ifdata uuid )
 
 check_bins() {
     # Append any needed binaries we need to check for, to our list
@@ -36,11 +38,11 @@ init_variables() {
     echo "MAAS Endpoint: $maas_endpoint"
     echo "MAAS Proxy: $maas_local_proxy"
 
-    core_packages=( jq moreutils uuid )
-    maas_packages=( maas maas-cli maas-proxy maas-dhcp maas-dns maas-rack-controller maas-region-api maas-common )
+    core_packages=( jq yq moreutils uuid )
+    maas_packages=( maas maas-cli maas-proxy maas-dhcp maas-dns maas-rack-controller maas-region-api maas-common bind9-dnsutils )
     # maas_packages=( maas maas-rack-controller maas-region-api )
-    # pg_packages=( postgresql-14 postgresql-client postgresql-client-common postgresql-common )
-    pg_packages=( postgresql-12 postgresql-client )
+    pg_packages=( postgresql-16 postgresql-client postgresql-client-common postgresql-common )
+    # pg_packages=( postgresql-14 postgresql-client )
 }
 
 remove_maas() {
@@ -56,11 +58,15 @@ remove_maas() {
     for package in "${maas_packages[@]}" "${pg_packages[@]}"; do
        sudo dpkg -P "$package"
     done
+    dpkg -l | awk '/^rc/ {print $2}' | xargs sudo dpkg -P
 }
 
 install_maas() {
     # This is separate from the removal, so we can handle them atomically
+    sudo apt-get -fyu install bind9
+    sudo cp named.conf.options /etc/bind/
     sudo apt-get -fyu install "${core_packages}" "${maas_packages[@]}" "${pg_packages[@]}"
+    # sudo nala install --no-fix-broken -y "${core_packages}" "${maas_packages[@]}" "${pg_packages[@]}"
     # exit
     # sudo sed -i 's/DISPLAY_LIMIT=5/DISPLAY_LIMIT=100/' /usr/share/maas/web/static/js/bundle/maas-min.js
 }
@@ -92,7 +98,7 @@ build_maas() {
     maas_api_key="$(sudo maas-region apikey --username=$maas_profile | tee ~/.maas-api.key)"
 
     # Fetch the MAAS API key, store to a file for later reuse, also set this var to that value 
-    sleep 3
+    sleep 30
     echo "maas login $maas_profile $maas_endpoint $maas_api_key"
     maas login "$maas_profile" "$maas_endpoint" "$maas_api_key"
 
@@ -108,43 +114,51 @@ build_maas() {
     maas $maas_profile maas set-config name=default_storage_layout value=lvm
     maas $maas_profile maas set-config name=network_discovery value=disabled
     maas $maas_profile maas set-config name=active_discovery_interval value=0
-    maas $maas_profile maas set-config name=kernel_opts value="console=ttyS0,115200 console=tty0,115200 elevator=mq-deadline fsck.mode=force fsck.repair=yes nosplash iommu=pt kvm_amd.npt=1 kvm_amd.avic=1 intel_iommu=on zswap.enabled=1 zswap.compressor=zstd zswap.max_pool_percent=20 zswap.zpool=z3fold scsi_mod.use_blk_mq=1 dm_mod.use_blk_mq=1 enable_mtrr_cleanup mtrr_spare_reg_nr=1 mitigations=off intel_iommu=on intel_idle.max_cstate=1 intel_pstate=passive clocksource=tsc nohz=off systemd.unified_cgroup_hierarchy=0"
+    maas $maas_profile maas set-config name=kernel_opts value="console=ttyS0,115200 fsck.mode=force fsck.repair=yes loglevel=3 systemd.show_status=auto transparent_hugepage=madvise intel_iommu=on iommu=pt mitigations=off nosplash psi=0"
     maas $maas_profile maas set-config name=maas_name value=us-east
-    maas $maas_profile maas set-config name=upstream_dns value="$maas_upstream_dns"
+    # maas $maas_profile maas set-config name=upstream_dns value="$maas_upstream_dns"
     maas $maas_profile maas set-config name=dnssec_validation value=no
     maas $maas_profile maas set-config name=enable_analytics value=false
     maas $maas_profile maas set-config name=enable_http_proxy value=true
-    # maas $maas_profile maas set-config name=node_timeout value=120
+    maas $maas_profile maas set-config name=node_timeout value=300
     maas $maas_profile maas set-config name=release_notifications value=false
     # maas $maas_profile maas set-config name=http_proxy value="$squid_proxy"
     maas $maas_profile maas set-config name=enable_third_party_drivers value=false
     maas $maas_profile maas set-config name=curtin_verbose value=true
+    maas $maas_profile maas set-config name=completed_intro value=true
+
+    maas $maas_profile node-scripts create name=00-maas-http_proxy comment="Man in the Middle Squid Proxy for HTTP and SSL" script@=00-maas-http_proxy.sh
+    maas $maas_profile sshkeys import lp:setuid
 
     maas $maas_profile boot-source update 1 url="$maas_boot_source"
-    # maas $maas_profile boot-source update 1 url=http://"$maas_bridge_ip":8765/maas/images/ephemeral-v3/daily/
+    maas $maas_profile boot-source update 1 url=http://"$maas_bridge_ip":8765/maas/images/ephemeral-v3/daily/
     maas $maas_profile package-repository update 1 name='main_archive' url="$package_repository"
+    maas $maas_profile tags create name=juju
 
     # This is hacky, but it's the only way I could find to reliably get the
     # correct subnet for the maas bridge interface
     maas $maas_profile subnet update "$(maas $maas_profile subnets read | jq -rc --arg maas_ip "$maas_ip_range" '.[] | select(.name | contains($maas_ip)) | "\(.id)"')" gateway_ip="$maas_bridge_ip"
-    sleep 10
+    maas $maas_profile subnet update "$(maas $maas_profile subnets read | jq -rc --arg maas_ip "$maas_ip_range" '.[] | select(.name | contains($maas_ip)) | "\(.id)"')" dns_servers="$maas_bridge_ip"
+    # maas $maas vlan update 1 0 dhcp_on=true primary_rack=$(maas admin rack-controllers read | jq -r '.[] | "\(.system_id)"')
+    sleep 30
 
     maas $maas_profile ipranges create type=dynamic start_ip="$maas_subnet_start" end_ip="$maas_subnet_end" comment='This is the reserved range for MAAS nodes'
+    maas $maas_profile ipranges create type=dynamic start_ip="$lxd_subnet_start" end_ip="$lxd_subnet_end" comment='This is the reserved range for MAAS nodes'
 
     # This is needed, because it points to localhost by default and will fail to 
     # commission/deploy in this state
     echo "DEBUG: http://$maas_bridge_ip:5240/MAAS/"
 
     sudo debconf-set-selections maas.debconf
-    sleep 2
+    sleep 3
     # sudo maas-rack config --region-url "http://$maas_bridge_ip:5240/MAAS/" && sudo service maas-rackd restart
     sudo DEBIAN_FRONTEND=noninteractive dpkg-reconfigure maas-rack-controller
     sleep 2
 
     sudo DEBIAN_FRONTEND=noninteractive dpkg-reconfigure maas-region-controller
-    sudo service maas-rackd restart
+    sudo cp named.conf.options /etc/bind/
+    sudo systemctl restart maas-regiond maas-rackd bind9
     sleep 10
-    maas $maas_profile vlan update fabric-2 0 dhcp_on=True primary_rack="$maas_system_id"
 }
 
 bootstrap_maas() {
@@ -153,6 +167,9 @@ bootstrap_maas() {
     maas $maas_profile boot-resources import
 
     until [ "$(maas $maas_profile boot-resources is-importing)" = false ]; do sleep 3; done;
+
+    # echo maas $maas_profile vlan update fabric-2 0 dhcp_on=True primary_rack="$maas_system_id"
+    maas $maas_profile vlan update fabric-1 0 dhcp_on=True primary_rack="$maas_system_id"
 
     # Add a chassis with nodes we want to build against
     maas $maas_profile machines add-chassis chassis_type=virsh prefix_filter=maas-node hostname="$virsh_chassis"
@@ -177,7 +194,6 @@ bootstrap_maas() {
 
 # These are for juju, adding a cloud matching the customer/reproducer we need
 add_cloud() {
-
 	if ! [ -x "$(command -v juju)" ]; then
 		sudo snap install juju --channel "$juju_version"
 	fi
@@ -192,21 +208,13 @@ clouds:
     type: maas
     auth-types: [ oauth1 ]
     description: MAAS cloud for $cloud_name
-    # endpoint: ${maas_endpoint:0:-8}
     endpoint: $maas_endpoint
     config:
       package_update: true
       package_upgrade: true
       apt-mirror: $package_repository
-      apt-http-proxy: $squid_proxy
-      apt-https-proxy: $squid_proxy
-      apt-no-proxy: $no_proxy
-      snap-http-proxy: $squid_proxy
-      snap-https-proxy: $squid_proxy
-      # snap-store-proxy: $snap_store_proxy
       enable-os-refresh-update: true
-      enable-os-upgrade: false
-      logging-config: <root>=DEBUG
+      enable-os-upgrade: true
     ca-certificates:
       - |
 ${mitm_cert}
@@ -220,37 +228,64 @@ credentials:
           maas-oauth: $maas_api_key
 EOF
 
+# timezone: "America/New_York"
 cat > config-"$rand_uuid".yaml <<EOF
 #cloud-config
-automatically-retry-hooks: true
-mongo-memory-profile: default
-default-series: bionic
-juju-ftp-proxy: $squid_proxy
-juju-http-proxy: $squid_proxy
-juju-https-proxy: $squid_proxy
-juju-no-proxy: $no_proxy
-apt-http-proxy: $squid_proxy
-apt-https-proxy: $squid_proxy
-apt-no-proxy: $no_proxy
+default-series: noble
 disable-telemetry: true
+logging-config: <root>=INFO;#http=DEBUG;#charmhub=DEBUG
+automatically-retry-hooks: true
 transmit-vendor-metrics: false
-num-provision-workers: 16
-ssl-hostname-verification: false
-update-status-hook-interval: 2m
-container-image-metadata-url: https://192.168.4.20/mirror/lxc-images/streams/v1/index.json
-container-image-stream: released
-image-metadata-url: https://192.168.4.20/mirror/lxc-images/
-agent-metadata-url: https://192.168.4.20/juju/tools/
+enable-os-refresh-update: true
+package_update: true
+package_upgrade: true
+development: true
 cloudinit-userdata: |
+  packages:
+    - 'acpid'
+    - 'snapd'
+    - 'ovmf'
+    - 'chrony'
+    - 'bridge-utils'
+    - 'locales'
+  package_update: true
+  package_upgrade: true
+  package_reboot_if_required: true
+  snap:
+    packages:
+      - name: lxd
+        channel: 6/stable
   preruncmd:
-    - bash -c "echo http_proxy=$squid_proxy >> /etc/environment";
-    - bash -c "echo https_proxy=$squid_proxy >> /etc/environment";
+    - [ apt-get, -y, remove, --purge, liblxc-common, liblxc1, lxcfs ]
   ca-certs:
-    trusted: 
+    trusted:
       - |
 ${mitm_cert}
+  write_files:
+    - path: /etc/apt/apt.conf.d/95proxy
+      permissions: '0644'
+      owner: root:root
+      content: |
+        Acquire::http::Proxy "http://192.168.120.11:3128";
+        Acquire::https::Proxy "http://192.168.120.11:3128";
+  postruncmd: 
+    - [ locale-gen ]
+    - [ timedatectl, set-timezone, America/New_York ]
+    - bash -c "echo 'http_proxy=http://192.168.120.11:3128' >> /etc/environment"
+    - bash -c "echo 'https_proxy=http://192.168.120.11:3128' >> /etc/environment"
+    - bash -c "echo 'no_proxy=localhost,127.0.0.1,192.168.120.11' >> /etc/environment"
+    - bash -c "echo 'export XZ_DEFAULTS=\"-T0\"' >> /etc/environment"
+    - bash -c "echo 'export XZ_OPT=\"-2 -T0\"' >> /etc/environment"
+    - bash -lc 'for i in {1..60}; do command -v lxc >/dev/null && break; sleep 2; done'
+    - [ lxc, config, set, core.proxy_http,  http://192.168.120.11:3128 ]
+    - [ lxc, config, set, core.proxy_https, http://192.168.120.11:3128 ]
+    - [ lxc, config, set, core.proxy_ignore_hosts, "127.0.0.1,localhost,::1,192.168.120.11" ]
+    - [ sed, -ri, 's/^#?GRUB_TIMEOUT_STYLE=.*/GRUB_TIMEOUT_STYLE=hidden/', /etc/default/grub ]
+    - [ sed, -ri, 's/^#?GRUB_TIMEOUT=.*/GRUB_TIMEOUT=0/', /etc/default/grub ]
+    - bash -c "grep -q '^GRUB_RECORDFAIL_TIMEOUT' /etc/default/grub || echo 'GRUB_RECORDFAIL_TIMEOUT=0' >> /etc/default/grub"
+    - bash -c "grep -q '^GRUB_DISABLE_OS_PROBER' /etc/default/grub || echo 'GRUB_DISABLE_OS_PROBER=true' >> /etc/default/grub"
+    - [ update-grub ]
 EOF
-
     echo "Adding cloud............: $cloud_name"
     # juju add-cloud --replace "$cloud_name" clouds-"$rand_uuid".yaml
     juju update-cloud "$cloud_name" -f clouds-"$rand_uuid".yaml
@@ -262,15 +297,24 @@ EOF
     echo "Details for cloud.......: $cloud_name..."
     juju clouds --format json | jq --arg cloud "$cloud_name" '.[$cloud]'
 
-    juju bootstrap "$cloud_name" --debug --config=config-"$rand_uuid".yaml
+    juju bootstrap "$cloud_name" --debug --config=config-"$rand_uuid".yaml --constraints tags=juju 
 
     # Since we created ephemeral files, let's wipe them out. Comment if you want to keep them around
     if [[ $? = 0 ]]; then
 	rm -f clouds-"$rand_uuid".yaml credentials-"$rand_uuid".yaml config-"$rand_uuid".yaml
     fi
 
-    juju enable-ha -n 3
+    # juju model-defaults lxd-snap-channel=5.21/edge
+    juju model-config -m controller container-networking-method=provider
+    juju model-config -m controller transmit-vendor-metrics=false
+    # Juju 2.x
+    # juju model-config -m controller ./user-data.yaml
+
+    # Juju 3.x
+    juju model-config -m controller --file=./user-data.yaml
+    juju enable-ha -n3
     juju machines -m controller
+    for node in {01..03}; do virsh autostart maas-node-${node}; done;
 }
 
 # Let's get rid of that cloud and clean up after ourselves
@@ -308,7 +352,8 @@ init_variables
 read_config
 
 # This is the proxy that MAAS itself uses (the "internal" MAAS proxy)
-no_proxy="192.168.,localhost,127.0.0.1,$maas_system_ip" # ,$(echo $maas_ip_range.{50..250} | sed 's/ /,/g')"
+no_proxy="localhost,127.0.0.1,$maas_system_ip,$(echo $maas_ip_range.{2..50} | sed 's/ /,/g')"
+# no_proxy="localhost,127.0.0.1,192.168.120.11,$maas_system_ip"
 
 while getopts ":a:bc:ij:nt:r" opt; do
   case $opt in
