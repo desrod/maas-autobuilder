@@ -248,15 +248,18 @@ cloudinit-userdata: |
     - 'chrony'
     - 'bridge-utils'
     - 'locales'
-  package_update: true
-  package_upgrade: true
+  apt:
+    preserve_sources_list: false
+    primary:
+      - arches: [default]
+        uri: http://mirrors.cat.pdx.edu/ubuntu/
+  package_update: false
+  package_upgrade: false
   package_reboot_if_required: true
   snap:
     packages:
       - name: lxd
         channel: 6/stable
-  preruncmd:
-    - [ apt-get, -y, remove, --purge, liblxc-common, liblxc1, lxcfs ]
   ca-certs:
     trusted:
       - |
@@ -271,20 +274,13 @@ ${mitm_cert}
   postruncmd: 
     - [ locale-gen ]
     - [ timedatectl, set-timezone, America/New_York ]
-    - bash -c "echo 'http_proxy=http://192.168.120.11:3128' >> /etc/environment"
-    - bash -c "echo 'https_proxy=http://192.168.120.11:3128' >> /etc/environment"
+    - bash -c "echo 'http{,s}_proxy=http://192.168.120.11:3128' >> /etc/environment"
     - bash -c "echo 'no_proxy=localhost,127.0.0.1,192.168.120.11' >> /etc/environment"
     - bash -c "echo 'export XZ_DEFAULTS=\"-T0\"' >> /etc/environment"
     - bash -c "echo 'export XZ_OPT=\"-2 -T0\"' >> /etc/environment"
-    - bash -lc 'for i in {1..60}; do command -v lxc >/dev/null && break; sleep 2; done'
     - [ lxc, config, set, core.proxy_http,  http://192.168.120.11:3128 ]
     - [ lxc, config, set, core.proxy_https, http://192.168.120.11:3128 ]
     - [ lxc, config, set, core.proxy_ignore_hosts, "127.0.0.1,localhost,::1,192.168.120.11" ]
-    - [ sed, -ri, 's/^#?GRUB_TIMEOUT_STYLE=.*/GRUB_TIMEOUT_STYLE=hidden/', /etc/default/grub ]
-    - [ sed, -ri, 's/^#?GRUB_TIMEOUT=.*/GRUB_TIMEOUT=0/', /etc/default/grub ]
-    - bash -c "grep -q '^GRUB_RECORDFAIL_TIMEOUT' /etc/default/grub || echo 'GRUB_RECORDFAIL_TIMEOUT=0' >> /etc/default/grub"
-    - bash -c "grep -q '^GRUB_DISABLE_OS_PROBER' /etc/default/grub || echo 'GRUB_DISABLE_OS_PROBER=true' >> /etc/default/grub"
-    - [ update-grub ]
 EOF
     echo "Adding cloud............: $cloud_name"
     # juju add-cloud --replace "$cloud_name" clouds-"$rand_uuid".yaml

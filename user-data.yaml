@@ -1,0 +1,134 @@
+#cloud-config
+automatically-retry-hooks: true
+default-series: focal
+disable-telemetry: true
+enable-os-refresh-update: true
+package_update: true
+package_upgrade: true
+ssl-hostname-verification: false
+transmit-vendor-metrics: false
+juju-ftp-proxy: http://192.168.120.11:3128
+juju-http-proxy: http://192.168.120.11:3128
+juju-no-proxy: localhost,127.0.0.1
+apt-http-proxy: http://192.168.120.11:3128
+container-image-metadata-url: 'https://lxd-images-mirror/daily/'
+# image-metadata-url: 'https://lxd-images-mirror/releases/'
+# agent-metadata-url: 'http://192.168.4.20:8765/juju/tools/'
+lxd-snap-channel: 6/stable
+cloudinit-userdata: |
+  manage_etc_hosts: true
+  prefer_fqdn_over_hostname: false
+  packages:
+    - 'acpid'
+    - 'bridge-utils'
+    - 'locales'
+    - 'ovmf'
+    - 'python3-pip'
+    - 'snapd'
+    - 'zabbix-agent'
+    - 'zfsutils-linux'
+  apt:
+    preserve_sources_list: false
+    primary:
+      - arches: [default]
+        uri: http://mirrors.cat.pdx.edu/ubuntu/
+  package_update: false
+  package_upgrade: false
+  package_reboot_if_required: true
+  lxd:
+    preseed: |
+      config: 
+        - core.proxy_http: 'http://192.168.120.11:3128'
+        - core.proxy_https: 
+        - core.https_address: '[::]:8443'
+        - core.images_remote: lxc-images-mirror
+        - core.trust_password: p4ssw0rd
+        - images.compression_algorithm: xz
+      networks:
+        - config:
+            ipv4.nat: true
+            ipv6.nat: true
+          description: ""
+          name: br-enp0s17
+          type: bridge
+          project: default
+      storage_pools:
+        - config:
+            size: 10GiB
+            source: /var/snap/lxd/common/lxd/disks/default.img
+          description: ""
+          name: default
+          driver: zfs
+      profiles:
+        - config: {}
+          description: Default Juju LXD profile
+          devices:
+            eth0:
+              name: eth0
+              network: br-enp0s17
+              type: nic
+            root:
+              path: /
+              pool: default
+              type: disk
+          name: default
+  preruncmd:
+    - [ hwclock, --systohc, --utc ]
+    - [ snap, refresh, lxd, --channel=6/stable ]
+    - [ snap, install, lxd, --channel=6/stable ]
+    - [ snap, set, lxd, shiftfs.enable=true ]
+  write_files:
+  - encoding: b64
+    content: bHo0Cmx6NF9jb21wcmVzcwp6cmFtCnpzdGQKenN0ZF9jb21wcmVzcwp6M2ZvbGQK
+    owner: root:root
+    path: /etc/initramfs-tools/modules
+    permissions: '0644'
+  - encoding: gzip+b64
+    content: | 
+      H4sIAAAAAAACA5WQOxLCIBCG+z0FB1CTImNB52PstFAvsMJG0QQQUMfbS2LIpFBnbGBf//7f7MoZ
+      HUhLzrTRKoYORVB3goXRpTpyJtpfHmBPta0wkOcsdGGswgZrSlOwdFHqOFupimBtZOxMiwK2dCYR
+      xvunjQWL3j+Mk9AM6Vad3dFlAsWJMkmHZlf2XjiRGJJF0vmPLnkOcxSXm+WsxMpT9LzelCOZ8pkQ
+      ZP9j6B2HGP09EsUuRF9o39QdDWA72eBkX470EyXJO5QXjxMpKbYBAAA=
+    owner: root:root
+    path: /etc/debconf.conf
+    permissions: '0644'
+  - encoding: b64
+    content: | 
+      QUNUSU9OPT0iYWRkfGNoYW5nZSIsIEtFUk5FTD09InNkW2Etel0iLCBBVFRSe3F1ZXVlL3JvdGF0
+      aW9uYWx9PT0iMCIsIEFUVFJ7cXVldWUvc2NoZWR1bGVyfT0ibm9uZSIK
+    owner: root:root
+    path: /etc/udev/rules.d/60-kernel-scheduler.rules
+    permissions: '0644'
+  - encoding: b64
+    content: | 
+      ZGVmYXVsdC1yZW1vdGU6IGx4Yy1pbWFnZXMtbWlycm9yCnJlbW90ZXM6CiAgbHhjLWltYWdlcy1t
+      aXJyb3I6CiAgICBhZGRyOiBodHRwczovLzE5Mi4xNjguMTIwLjE6ODQ0MwogICAgYXV0aF90eXBl
+      OiB0bHMKICAgIHByb2plY3Q6IGRlZmF1bHQKICAgIHByb3RvY29sOiBseGQKICAgIHB1YmxpYzog
+      ZmFsc2UKYWxpYXNlczoge30K
+    owner: root:root
+    path: /var/snap/lxd/common/global-conf/config.yml
+    permissions: '0644'
+  - encoding: b64
+    content: | 
+      S0VSTkVMPT0idm5ldFswLTldKiIsIFJVTis9Ii9zYmluL2lwIGxpbmsgc2V0ICVrIHR4cXVldWVs
+      ZW4gMjUwMCIK
+    owner: root:root
+    path: /etc/udev/rules/59-net-ring.rules
+    permissions: '0644'
+  write_files:
+    - path: /etc/apt/apt.conf.d/95proxy
+      permissions: '0644'
+      owner: root:root
+      content: |
+        Acquire::http::Proxy "http://192.168.120.11:3128";
+        Acquire::https::Proxy "http://192.168.120.11:3128";
+  postruncmd:
+    - [ locale-gen ]
+    - [ timedatectl, set-timezone, America/New_York ]
+    - bash -c "echo 'http{,s}_proxy=http://192.168.120.11:3128' >> /etc/environment"
+    - bash -c "echo 'no_proxy=localhost,127.0.0.1,192.168.120.11' >> /etc/environment"
+    - bash -c "echo 'export XZ_DEFAULTS=\"-T0\"' >> /etc/environment"
+    - bash -c "echo 'export XZ_OPT=\"-2 -T0\"' >> /etc/environment"
+    - [ lxc, config, set, core.proxy_http,  http://192.168.120.11:3128 ]
+    - [ lxc, config, set, core.proxy_https, http://192.168.120.11:3128 ]
+    - [ lxc, config, set, core.proxy_ignore_hosts, "127.0.0.1,localhost,::1,192.168.120.11" ]
