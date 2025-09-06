@@ -14,7 +14,7 @@ storage_path = Path("/storage/images/maas")
 storage_format = "raw"  # Use raw images instead of qcow2
 node_name = "maas-node"
 nic_model = "virtio"
-disk_sizes = [20, 300, 300]  # in GiB
+disk_sizes = [60, 300, 300]  # in GiB
 
 
 class TqdmLoggingHandler(logging.Handler):
@@ -30,6 +30,7 @@ class TqdmLoggingHandler(logging.Handler):
             print(record.getMessage())
 
 
+# Domain XML template (leaner & faster defaults for headless MAAS/juju nodes)
 node_xml = """
 <domain type="kvm" xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'>
   <name>{machine}</name>
@@ -135,6 +136,11 @@ def validate_range(ctx, param, value):
     if value is None:
         return start + count - 1
     max_end = start + count - 1
+    if value > max_end:
+        logging.warning(
+            f"Requested end={value} exceeds count limit; capping to {max_end}"
+        )
+        return max_end
     return value
 
 
@@ -244,9 +250,7 @@ def make_disk_xml(machine_path, machine, disk_sizes):
     return "\n".join(disk_entries)
 
 
-def create_machines(
-    conn, start: int, end: int, memory: int, vcpu: int, network: str, nic: str
-):
+def create_machines(conn, start: int, end: int, memory: int, vcpu: int, network: str, nic: str):
     mem_kb = memory * 1024
     for idx in tqdm(range(start, end + 1), desc="Creating nodes"):
         machine = format_machine_name(idx, end)
@@ -348,3 +352,4 @@ def main(create, wipe, debug, count, start, end, memory, vcpu, network, nic):
 
 if __name__ == "__main__":
     main()
+
