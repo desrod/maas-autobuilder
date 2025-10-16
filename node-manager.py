@@ -106,10 +106,10 @@ node_xml = """
       <backend model="random">/dev/urandom</backend>
     </rng>
 
-    <interface type="network">
+    <interface type="bridge">
       <mac address="{mac1}"/>
       <link state="up"/>
-      <source network="{network}"/>
+      <source bridge="{bridge}"/>
       <mtu size="1500"/>
       <model type="{nic}"/>
       <driver name="vhost" queues="{vcpu}" packed="on"/>
@@ -239,7 +239,7 @@ def make_disk_xml(machine_path, machine, disk_sizes):
       <driver name="qemu"
               type="raw"
               cache="none"
-              io="native"
+              io="threads"
               discard="unmap"
               detect_zeroes="unmap"
               iothread="{idx}"/>
@@ -250,7 +250,7 @@ def make_disk_xml(machine_path, machine, disk_sizes):
     return "\n".join(disk_entries)
 
 
-def create_machines(conn, start: int, end: int, memory: int, vcpu: int, network: str, nic: str):
+def create_machines(conn, start: int, end: int, memory: int, vcpu: int, bridge: str, nic: str):
     mem_kb = memory * 1024
     for idx in tqdm(range(start, end + 1), desc="Creating nodes"):
         machine = format_machine_name(idx, end)
@@ -266,7 +266,7 @@ def create_machines(conn, start: int, end: int, memory: int, vcpu: int, network:
             disk_xml=disk_xml,
             machine_path=storage_path / machine,
             mac1=mac1,
-            network=network,
+            bridge=bridge,
             nic=nic,
         )
         conn.defineXML(xml)
@@ -314,10 +314,10 @@ def destroy_machines(conn, start: int, end: int):
 )
 @click.option("-m", "--memory", type=int, default=1024, help="Memory in MB per node")
 @click.option("--vcpu", type=int, default=1, help="vCPUs per node")
-@click.option("-n", "--network", default="maas", help="Network name")
+@click.option("-b", "--bridge", default="br0", help="Bridge name")
 @click.option("-N", "--nic", default=nic_model, help="NIC model")
 @click.option("-d", "--debug", is_flag=True, help="Enable DEBUG logging")
-def main(create, wipe, debug, count, start, end, memory, vcpu, network, nic):
+def main(create, wipe, debug, count, start, end, memory, vcpu, bridge, nic):
     # configure logging
     logging.root.handlers.clear()
     handler = TqdmLoggingHandler()
@@ -340,7 +340,7 @@ def main(create, wipe, debug, count, start, end, memory, vcpu, network, nic):
 
     if create:
         click.echo(f"Creating {total} machines ({start}…{end})")
-        create_machines(conn, start, end, memory, vcpu, network, nic)
+        create_machines(conn, start, end, memory, vcpu, bridge, nic)
 
     if wipe:
         click.echo(f"Destroying {total} machines ({start}…{end})")
