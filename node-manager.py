@@ -56,19 +56,30 @@ node_xml = """
     <hap/>
     <vmport state="off"/>
   </features>
-  <cpu mode="host-passthrough" check="none">
+  <cpu mode='host-passthrough' check='none' migratable='off'>
     <model name="host"/>
     <feature name="pcid" policy="require"/>
-    <feature name="spec-ctrl" policy="require"/>
-    <feature name="ssbd" policy="require"/>
     <feature name="pdpe1gb" policy="require"/>
     <topology sockets="1" cores="{vcpu}" threads="1"/>
   </cpu>
-  <power_management>
+  <memoryBacking>
+    <nosharepages/>
+  </memoryBacking>
+  <cputune>
+    <shares>2048</shares>
+  </cputune>
+  <blkiotune>
+    <!-- 100..1000 (or 10..1000 on newer kernels); equal VMs => equal weight -->
+    <weight>500</weight>
+  </blkiotune>
+  <pm>
     <suspend_mem/>
     <suspend_disk/>
     <suspend_hybrid/>
-  </power_management>
+  </pm>
+  <resource>
+    <partition>/virtualmachines/maas</partition>
+  </resource>
   <migration_features>
     <live/>
     <uri_transports>
@@ -92,12 +103,9 @@ node_xml = """
   <devices>
     <emulator>/usr/bin/qemu-system-x86_64</emulator>
 
-    <!-- Disable ballooning for steadier performance -->
-    <memballoon model="none"/>
+    <memballoon model="virtio"/>
 
     {disk_xml}
-
-    <!-- (Removed USB controllers & virtio-serial/SPICE to cut emulator overhead) -->
 
     <controller type="pci" index="0" model="pcie-root"/>
 
@@ -114,6 +122,16 @@ node_xml = """
       <model type="{nic}"/>
       <driver name="vhost" queues="{vcpu}" packed="on"/>
       <address type="pci" domain="0x0000" bus="0x00" slot="0x11" function="0x0"/>
+    </interface>
+
+    <interface type="bridge">
+      <mac address="{mac2}"/>
+      <link state="up"/>
+      <source bridge="{bridge}"/>
+      <mtu size="1500"/>
+      <model type="{nic}"/>
+      <driver name="vhost" queues="{vcpu}" packed="on"/>
+      <address type="pci" domain="0x0000" bus="0x00" slot="0x12" function="0x0"/>
     </interface>
 
     <serial type="pty">
@@ -228,21 +246,22 @@ def format_machine_name(idx: int, end: int) -> str:
     return f"{node_name}-{idx:0{width}d}"
 
 
-def make_disk_xml(machine_path, machine, disk_sizes):
+def make_disk_xml(machine_path, machine, disk_sizes, io_mode="native"):
     disk_entries = []
     # map 1 -> vda, 2 -> vdb, 3 -> vdc and iothreads 1,2,3 (virtio-blk)
     for idx, size in enumerate(disk_sizes, start=1):
         dev = f"vd{chr(ord('a') + idx - 1)}"
+        iothread_id = idx  # 1:1 mapping disk->iothread
         disk_entries.append(
             f"""
     <disk type="file" device="disk">
       <driver name="qemu"
               type="raw"
               cache="none"
-              io="threads"
+              io="{io_mode}"
               discard="unmap"
               detect_zeroes="unmap"
-              iothread="{idx}"/>
+              iothread="{iothread_id}"/>
       <source file="{machine_path}/{machine}-d{idx}.img"/>
       <target dev="{dev}" bus="virtio"/>
     </disk>"""
@@ -252,26 +271,31 @@ def make_disk_xml(machine_path, machine, disk_sizes):
 
 def create_machines(conn, start: int, end: int, memory: int, vcpu: int, bridge: str, nic: str):
     mem_kb = memory * 1024
+    iothreads = len(disk_sizes)
+
     for idx in tqdm(range(start, end + 1), desc="Creating nodes"):
         machine = format_machine_name(idx, end)
         create_storage(conn, machine)
 
         mac1 = RandMac("00:00:00:00:00:00", False)
-        disk_xml = make_disk_xml(storage_path / machine, machine, disk_sizes)
+        mac2 = RandMac("00:00:00:00:00:00", False)
+
+        disk_xml = make_disk_xml(storage_path / machine, machine, disk_sizes, io_mode="native")
+
         xml = node_xml.format(
             machine=machine,
             memory=mem_kb,
             vcpu=vcpu,
-            iothreads=len(disk_sizes),
+            iothreads=iothreads,
             disk_xml=disk_xml,
             machine_path=storage_path / machine,
             mac1=mac1,
+            mac2=mac2,
             bridge=bridge,
             nic=nic,
         )
         conn.defineXML(xml)
         time.sleep(0.1)
-
 
 def destroy_or_undefine_domain(dom):
     try:
@@ -352,4 +376,3 @@ def main(create, wipe, debug, count, start, end, memory, vcpu, bridge, nic):
 
 if __name__ == "__main__":
     main()
-
