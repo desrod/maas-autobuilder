@@ -1,188 +1,137 @@
 #!/usr/bin/env python3
-# -*- coding: utf-8 -*-
 
 import logging
+import os
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from pathlib import Path
+
 import click
 import libvirt
-from pathlib import Path
 from randmac import RandMac
 from tqdm import tqdm
 
-version = 1.01
-storage_path = Path("/storage/images/maas")
-storage_format = "raw"  # Use raw images instead of qcow2
-node_name = "maas-node"
-nic_model = "virtio"
-disk_sizes = [60, 300, 300]  # in GiB
+
+# Tunables go here, very little need to touch anything else These values
+# control where VM storage lives and how new nodes are provisioned when
+# the script runs.
+version        = 1.02
+storage_path   = Path("/storage/images/maas")
+storage_format = "raw"
+node_name      = "maas-node"
+nic_model      = "virtio"
+disk_sizes     = [60, 300, 300]
 
 
+# Logging handler that works with tqdm so the parallel log output does
+# not corrupt the progress bar while nodes are being created or
+# destroyed.
 class TqdmLoggingHandler(logging.Handler):
-    """Logging handler that routes messages through tqdm.write()."""
-
     def emit(self, record):
         try:
             msg = self.format(record)
             tqdm.write(msg)
             self.flush()
         except Exception:
-            # fallback to normal print if tqdm fails
             print(record.getMessage())
 
 
-# Domain XML template (leaner & faster defaults for headless MAAS/juju nodes)
-node_xml = """
-<domain type="kvm" xmlns:qemu='http://libvirt.org/schemas/domain/qemu/1.0'>
+# Build the minimal base domain XML used when defining a default VM.
+# Most device configuration is attached afterward so the XML here stays
+# small and easy to maintain. I've added some tweaks for
+# hyperconverged, over-subscribed VMs on the same host.
+def build_base_domain(machine, memory_mb, vcpu):
+    return f"""
+<domain type="kvm">
   <name>{machine}</name>
-  <memory unit="KiB">{memory}</memory>
-  <currentMemory unit="KiB">{memory}</currentMemory>
-  <metadata>
-    <libosinfo:libosinfo xmlns:libosinfo="http://libosinfo.org/xmlns/libvirt/domain/1.0">
-      <libosinfo:os id="http://ubuntu.com/ubuntu/22.04"/>
-    </libosinfo:libosinfo>
-  </metadata>
+
+  <memory unit="MiB">{memory_mb}</memory>
   <vcpu placement="static">{vcpu}</vcpu>
-  <iothreads>{iothreads}</iothreads>
+
+  <blkiotune>
+    <weight>500</weight>
+  </blkiotune>
+
+  <cputune>
+    <shares>2048</shares>
+  </cputune>
+
   <os>
-    <type arch="x86_64" machine="q35">hvm</type>
-    <loader readonly="yes" type="rom">/usr/share/ovmf/OVMF.fd</loader>
+    <type arch="x86_64" machine="pc-q35-noble">hvm</type>
     <boot dev="network"/>
     <boot dev="hd"/>
   </os>
+
   <features>
     <acpi/>
     <apic/>
     <pae/>
-    <hap/>
+    <hap state="on"/>
     <vmport state="off"/>
   </features>
-  <cpu mode='host-passthrough' check='none' migratable='off'>
-    <model name="host"/>
-    <feature name="pcid" policy="require"/>
-    <feature name="pdpe1gb" policy="require"/>
-    <topology sockets="1" cores="{vcpu}" threads="1"/>
+
+  <cpu mode="host-passthrough" check="none" migratable="off">
+    <topology sockets="1" dies="1" cores="{vcpu}" threads="1"/>
   </cpu>
-  <memoryBacking>
-    <nosharepages/>
-  </memoryBacking>
-  <cputune>
-    <shares>2048</shares>
-  </cputune>
-  <blkiotune>
-    <!-- 100..1000 (or 10..1000 on newer kernels); equal VMs => equal weight -->
-    <weight>500</weight>
-  </blkiotune>
-  <pm>
-    <suspend_mem/>
-    <suspend_disk/>
-    <suspend_hybrid/>
-  </pm>
-  <resource>
-    <partition>/virtualmachines/maas</partition>
-  </resource>
-  <migration_features>
-    <live/>
-    <uri_transports>
-      <uri_transport>tcp</uri_transport>
-    </uri_transports>
-  </migration_features>
-  <clock offset="utc">
-    <timer name="rtc" tickpolicy="catchup" track="guest">
-      <catchup threshold="123" slew="120" limit="10000"/>
-    </timer>
-    <timer name="pit" tickpolicy="delay"/>
-    <timer name="hpet" present="no"/>
-  </clock>
-  <on_poweroff>destroy</on_poweroff>
-  <on_reboot>restart</on_reboot>
-  <on_crash>destroy</on_crash>
-  <pm>
-    <suspend-to-mem enabled="no"/>
-    <suspend-to-disk enabled="no"/>
-  </pm>
+
   <devices>
     <emulator>/usr/bin/qemu-system-x86_64</emulator>
-
     <memballoon model="virtio"/>
-
-    {disk_xml}
-
-    <controller type="pci" index="0" model="pcie-root"/>
-
-    <!-- Faster RNG that won't block under boot storms -->
-    <rng model="virtio">
-      <backend model="random">/dev/urandom</backend>
-    </rng>
-
-    <interface type="bridge">
-      <mac address="{mac1}"/>
-      <link state="up"/>
-      <source bridge="{bridge}"/>
-      <mtu size="1500"/>
-      <model type="{nic}"/>
-      <driver name="vhost" queues="{vcpu}" packed="on"/>
-      <address type="pci" domain="0x0000" bus="0x00" slot="0x11" function="0x0"/>
-    </interface>
-
-    <interface type="bridge">
-      <mac address="{mac2}"/>
-      <link state="up"/>
-      <source bridge="{bridge}"/>
-      <mtu size="1500"/>
-      <model type="{nic}"/>
-      <driver name="vhost" queues="{vcpu}" packed="on"/>
-      <address type="pci" domain="0x0000" bus="0x00" slot="0x12" function="0x0"/>
-    </interface>
-
-    <serial type="pty">
-      <target type="isa-serial" port="0">
-        <model name="isa-serial"/>
-      </target>
-    </serial>
-
-    <console type="pty">
-      <target type="serial" port="0"/>
-    </console>
   </devices>
 </domain>
 """
 
 
-def validate_range(ctx, param, value):
-    start = ctx.params["start"]
-    count = ctx.params["count"]
-    if value is None:
-        return start + count - 1
-    max_end = start + count - 1
-    if value > max_end:
-        logging.warning(
-            f"Requested end={value} exceeds count limit; capping to {max_end}"
-        )
-        return max_end
-    return value
+# Attach virtio disks to an already-defined domain XML. Disks are created
+# separately through storage pools and then connected to the domain
+# using libvirt device XML.
+def attach_disk(dom, path, dev):
+    disk_xml = f"""
+<disk type='file' device='disk'>
+  <driver name='qemu' type='raw' cache='none' io='native'/>
+  <source file='{path}'/>
+  <target dev='{dev}' bus='virtio'/>
+</disk>
+"""
+    dom.attachDeviceFlags(disk_xml, libvirt.VIR_DOMAIN_AFFECT_CONFIG)
 
 
+# Attach a bridged NIC to the domain. MAAS will later discover these
+# MACs and associate them with nodes when it does its commissioning.
+def attach_nic(dom, mac, bridge, model):
+    nic_xml = f"""
+<interface type='bridge'>
+  <mac address='{mac}'/>
+  <source bridge='{bridge}'/>
+  <model type='{model}'/>
+</interface>
+"""
+    dom.attachDeviceFlags(nic_xml, libvirt.VIR_DOMAIN_AFFECT_CONFIG)
+
+
+# Generate the XML block describing a libvirt storage pool dedicated to
+# a single VM. Each node receives its own pool so disks remain isolated
+# and easier to clean up later. This was initially quite messy.
 def generate_pool_xml(machine: str, path: Path) -> str:
     return f"""
 <pool type='dir'>
   <name>{machine}</name>
   <target>
     <path>{path}</path>
-    <permissions>
-      <mode>0755</mode>
-      <owner>0</owner>
-      <group>0</group>
-    </permissions>
   </target>
 </pool>
 """
 
 
+# Generate the XML block describing a disk volume inside the node’s pool.
+# Disks are preallocated logically but start with zero allocation to
+# keep provisioning fast until bytes are scribbled to the storage.
 def generate_volume_xml(
     machine: str, disk_number: int, disk_size: int, path: Path
 ) -> str:
     vol_name = f"{machine}-d{disk_number}.img"
     vol_path = path / vol_name
+
     return f"""
 <volume type='file'>
   <name>{vol_name}</name>
@@ -191,187 +140,189 @@ def generate_volume_xml(
   <target>
     <path>{vol_path}</path>
     <format type='{storage_format}'/>
-    <permissions>
-      <mode>0644</mode>
-      <owner>0</owner>
-      <group>0</group>
-    </permissions>
   </target>
 </volume>
 """
 
 
+# Create the storage pool and associated volumes for each VM. Pools are
+# built, started, and configured to autostart so libvirt maintains them
+# across host restarts.
 def create_storage(conn, machine: str):
     pool_path = storage_path / machine
     pool_path.mkdir(parents=True, exist_ok=True)
-    logging.debug(f"Ensured directory {pool_path}")
 
     pool_xml = generate_pool_xml(machine, pool_path)
+
     pool = conn.storagePoolDefineXML(pool_xml, 0)
     pool.build(0)
     pool.create(0)
-    try:
-        pool.setAutostart(True)
-    except libvirt.libvirtError as e:
-        logging.warning(f"Could not set autostart for pool {machine}: {e}")
+    pool.setAutostart(True)
 
     for idx, size in enumerate(disk_sizes, start=1):
         vol_xml = generate_volume_xml(machine, idx, size, pool_path)
         pool.createXML(vol_xml, 0)
+
     pool.refresh()
 
 
+# Destroy the storage pool and all associated volumes for a VM. This is
+# necessary when wiping nodes between test resets or rebuilds.
 def destroy_storage(conn, machine: str):
     try:
         pool = conn.storagePoolLookupByName(machine)
+
         for vol in pool.listVolumes():
             try:
                 pool.storageVolLookupByName(vol).delete()
-            except libvirt.libvirtError as e:
-                logging.warning(f"Couldn't delete volume {vol}: {e}")
+            except libvirt.libvirtError:
+                pass
+
         pool.destroy()
         pool.undefine()
-        logging.info(f"Destroyed storage pool {machine}")
+
     except libvirt.libvirtError:
-        logging.debug(f"No storage pool named {machine}")
-    finally:
-        try:
-            (storage_path / machine).rmdir()
-        except OSError:
-            pass
+        pass
+
+    try:
+        (storage_path / machine).rmdir()
+    except OSError:
+        pass
 
 
+# Format node names consistently so MAAS sees deterministic hostnames, eg:
+# maas-node-01, maas-node-02, etc.
 def format_machine_name(idx: int, end: int) -> str:
     width = max(2, len(str(end)))
     return f"{node_name}-{idx:0{width}d}"
 
 
-def make_disk_xml(machine_path, machine, disk_sizes, io_mode="native"):
-    disk_entries = []
-    # map 1 -> vda, 2 -> vdb, 3 -> vdc and iothreads 1,2,3 (virtio-blk)
-    for idx, size in enumerate(disk_sizes, start=1):
-        dev = f"vd{chr(ord('a') + idx - 1)}"
-        iothread_id = idx  # 1:1 mapping disk->iothread
-        disk_entries.append(
-            f"""
-    <disk type="file" device="disk">
-      <driver name="qemu"
-              type="raw"
-              cache="none"
-              io="{io_mode}"
-              discard="unmap"
-              detect_zeroes="unmap"
-              iothread="{iothread_id}"/>
-      <source file="{machine_path}/{machine}-d{idx}.img"/>
-      <target dev="{dev}" bus="virtio"/>
-    </disk>"""
-        )
-    return "\n".join(disk_entries)
+# Worker routine executed by the thread pool when creating the nodes.
+def create_machine_worker(idx, end, memory, vcpu, bridge, nic):
+
+    conn = libvirt.open("qemu:///system")
+    if conn is None:
+        raise RuntimeError("Failed to open libvirt connection")
+
+    machine = format_machine_name(idx, end)
+
+    create_storage(conn, machine)
+
+    mac1 = RandMac("52:54:00:00:00:00", False)
+    mac2 = RandMac("52:54:00:00:00:00", False)
+
+    xml = build_base_domain(machine, memory, vcpu)
+
+    dom = conn.defineXML(xml)
+
+    machine_path = storage_path / machine
+
+    # Attach disks sequentially
+    for disk_idx, size in enumerate(disk_sizes, start=1):
+        dev = f"vd{chr(ord('a') + disk_idx - 1)}"
+        attach_disk(dom, f"{machine_path}/{machine}-d{disk_idx}.img", dev)
+
+    # Attach two NICs so MAAS can PXE and provision the node for bridges or
+    # openstack deployments through juju bundles/terraform
+    attach_nic(dom, mac1, bridge, nic)
+    attach_nic(dom, mac2, bridge, nic)
+
+    conn.close()
+
+    return machine
 
 
-def create_machines(conn, start: int, end: int, memory: int, vcpu: int, bridge: str, nic: str):
-    mem_kb = memory * 1024
-    iothreads = len(disk_sizes)
+# Parallel node creation driver. Initializes a thread pool to provision
+# multiple VMs simultaneously while tqdm provides progress feedback on
+# the main thread.
+def create_machines(conn, start, end, memory, vcpu, bridge, nic):
 
-    for idx in tqdm(range(start, end + 1), desc="Creating nodes"):
-        machine = format_machine_name(idx, end)
-        create_storage(conn, machine)
+    total = end - start + 1
 
-        mac1 = RandMac("00:00:00:00:00:00", False)
-        mac2 = RandMac("00:00:00:00:00:00", False)
+    # Select a conservative worker count to avoid saturating libvirt
+    workers = min(16, os.cpu_count() or 4)
 
-        disk_xml = make_disk_xml(storage_path / machine, machine, disk_sizes, io_mode="native")
+    with ThreadPoolExecutor(max_workers=workers) as executor:
 
-        xml = node_xml.format(
-            machine=machine,
-            memory=mem_kb,
-            vcpu=vcpu,
-            iothreads=iothreads,
-            disk_xml=disk_xml,
-            machine_path=storage_path / machine,
-            mac1=mac1,
-            mac2=mac2,
-            bridge=bridge,
-            nic=nic,
-        )
-        conn.defineXML(xml)
-        time.sleep(0.1)
+        futures = []
 
-def destroy_or_undefine_domain(dom):
-    try:
-        if dom.isActive():
-            dom.destroy()
-        dom.undefine()
-    except libvirt.libvirtError as e:
-        logging.warning(f"Could not destroy/undefine {dom.name()}: {e}")
+        for idx in range(start, end + 1):
+            futures.append(
+                executor.submit(
+                    create_machine_worker,
+                    idx,
+                    end,
+                    memory,
+                    vcpu,
+                    bridge,
+                    nic,
+                )
+            )
+
+        with tqdm(total=total, desc="Creating nodes") as pbar:
+            for future in as_completed(futures):
+                future.result()
+                pbar.update(1)
 
 
-def destroy_machines(conn, start: int, end: int):
+# Sequential destruction routine for nodes and their storage pools. Used
+# when resetting the lab environment from 'n' nodes to 0.
+def destroy_machines(conn, start, end):
+
     for idx in tqdm(range(start, end + 1), desc="Destroying nodes"):
+
         machine = format_machine_name(idx, end)
+
         try:
             dom = conn.lookupByName(machine)
-            destroy_or_undefine_domain(dom)
+
+            if dom.isActive():
+                dom.destroy()
+
+            dom.undefine()
+
         except libvirt.libvirtError:
-            logging.debug(f"No domain named {machine}")
+            pass
+
         destroy_storage(conn, machine)
 
 
+# All the Click options go here. Add more as needed.
 @click.command()
-@click.option("-c", "--create", is_flag=True, help="Create nodes to manage")
-@click.option("-w", "--wipe", is_flag=True, help="Wipe nodes created previously")
-@click.option(
-    "-C",
-    "--count",
-    type=click.IntRange(1, 5000, clamp=True),
-    required=True,
-    help="Total number of machines",
-)
-@click.option("-s", "--start", type=int, default=1, help="First node index")
-@click.option(
-    "-e",
-    "--end",
-    type=int,
-    default=None,
-    callback=validate_range,
-    help="Last node index (capped to start+count-1)",
-)
-@click.option("-m", "--memory", type=int, default=1024, help="Memory in MB per node")
-@click.option("--vcpu", type=int, default=1, help="vCPUs per node")
-@click.option("-b", "--bridge", default="br0", help="Bridge name")
-@click.option("-N", "--nic", default=nic_model, help="NIC model")
-@click.option("-d", "--debug", is_flag=True, help="Enable DEBUG logging")
-def main(create, wipe, debug, count, start, end, memory, vcpu, bridge, nic):
-    # configure logging
+@click.option("-c", "--create", is_flag=True)
+@click.option("-w", "--wipe", is_flag=True)
+@click.option("-C", "--count", type=int, required=True)
+@click.option("-s", "--start", default=1)
+@click.option("-m", "--memory", default=1024)
+@click.option("--vcpu", default=1)
+@click.option("-b", "--bridge", default="br0")
+@click.option("-N", "--nic", default=nic_model)
+@click.option("-d", "--debug", is_flag=True)
+def main(create, wipe, debug, count, start, memory, vcpu, bridge, nic):
+
     logging.root.handlers.clear()
+
     handler = TqdmLoggingHandler()
     handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s: %(message)s"))
-    handler.setLevel(logging.INFO)
+
     logging.getLogger().addHandler(handler)
     logging.getLogger().setLevel(logging.DEBUG if debug else logging.INFO)
 
-    if end is None:
-        end = start + count - 1
-    total = end - start + 1
-    if total < 1:
-        logging.error("No machines to manage (end < start)")
-        return
+    end = start + count - 1
 
     conn = libvirt.open("qemu:///system")
+
     if not conn:
         logging.error("Failed to connect to libvirt")
         return
 
     if create:
-        click.echo(f"Creating {total} machines ({start}…{end})")
         create_machines(conn, start, end, memory, vcpu, bridge, nic)
 
     if wipe:
-        click.echo(f"Destroying {total} machines ({start}…{end})")
         destroy_machines(conn, start, end)
 
     conn.close()
-    logging.info("Done.")
 
 
 if __name__ == "__main__":
